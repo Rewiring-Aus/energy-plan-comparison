@@ -24,7 +24,7 @@ export function plansForDnsp(dnsp: string | null): Plan[] {
 }
 
 /** Whether a plan survives the current filters given the user's home + eligibility answers. */
-export function passesFilters(plan: Plan, f: PlanFilters, home: Pick<HomeInputs, 'solarKw' | 'batteryKwh'>): boolean {
+export function passesFilters(plan: Plan, f: PlanFilters, home: Pick<HomeInputs, 'solarKw' | 'batteryKwh' | 'evCount'>): boolean {
   if (f.tariffTypes.length) {
     // Variable-wholesale plans are their own kind; otherwise single vs time-of-use (demand plans
     // count as time-of-use — the demand charge is handled by its own exclude toggle below).
@@ -41,6 +41,7 @@ export function passesFilters(plan: Plan, f: PlanFilters, home: Pick<HomeInputs,
       if (r.thirdPartyOnly && !f.allowPartnerOffers) return false;
       if (r.solarRequired && home.solarKw <= 0) return false;
       if (r.batteryRequired && home.batteryKwh <= 0) return false;
+      if (r.evRequired && home.evCount <= 0) return false;
       if (r.seniorCard && !f.hasSeniorCard) return false;
     }
   }

@@ -73,6 +73,7 @@ export function PlanCard({ plan, result, rank, best, active, pinned, current, on
             {r?.thirdPartyOnly && <span className="badge warn">Members only</span>}
             {r?.solarRequired && <span className="badge warn">Solar required</span>}
             {r?.batteryRequired && <span className="badge warn">Battery required</span>}
+            {r?.evRequired && <span className="badge warn">EV required</span>}
             {r?.seniorCard && <span className="badge warn">Seniors card</span>}
           </div>
           <a

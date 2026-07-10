@@ -21,7 +21,7 @@ function plan(over: Partial<Plan>): Plan {
     singleRate: { blocks: [{ perKwh: 0.3 }] }, ...over,
   };
 }
-const noSolar = { solarKw: 0, batteryKwh: 0 };
+const noSolar = { solarKw: 0, batteryKwh: 0, evCount: 0 };
 
 describe('passesFilters', () => {
   it('hides partner-only and new-customer-only offers by default', () => {
@@ -41,7 +41,13 @@ describe('passesFilters', () => {
   it('hides solar/battery-required plans unless the home has them', () => {
     const p = plan({ restrictions: rest({ solarRequired: true }) });
     expect(passesFilters(p, BASE_FILTERS, noSolar)).toBe(false);
-    expect(passesFilters(p, BASE_FILTERS, { solarKw: 6.6, batteryKwh: 0 })).toBe(true);
+    expect(passesFilters(p, BASE_FILTERS, { solarKw: 6.6, batteryKwh: 0, evCount: 0 })).toBe(true);
+  });
+
+  it('hides EV-required plans unless the home has an EV', () => {
+    const p = plan({ restrictions: rest({ evRequired: true }) });
+    expect(passesFilters(p, BASE_FILTERS, noSolar)).toBe(false);
+    expect(passesFilters(p, BASE_FILTERS, { solarKw: 0, batteryKwh: 0, evCount: 1 })).toBe(true);
   });
 
   it('hides seniors plans unless the user has a card', () => {
@@ -78,5 +84,5 @@ describe('passesFilters', () => {
 });
 
 function rest(over: Partial<NonNullable<Plan['restrictions']>>): Plan['restrictions'] {
-  return { newCustomerOnly: false, thirdPartyOnly: false, solarRequired: false, batteryRequired: false, seniorCard: false, ...over };
+  return { newCustomerOnly: false, thirdPartyOnly: false, solarRequired: false, batteryRequired: false, evRequired: false, seniorCard: false, ...over };
 }
