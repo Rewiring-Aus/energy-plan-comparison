@@ -146,6 +146,12 @@ describe('normalizePlan', () => {
     const partner = normalizePlan(mk([{ type: 'THIRD_PARTY_ONLY', information: 'BP Rewards Member' }]))!;
     expect(partner.restrictions?.thirdPartyOnly).toBe(true);
 
+    // Structured membership enum values map to thirdPartyOnly even with no recognisable free text.
+    for (const type of ['ORG_MEMBER', 'LOYALTY_MEMBER', 'SPORT_CLUB_MEMBER']) {
+      const m = normalizePlan(mk([{ type, information: 'Eligible members' }]))!;
+      expect(m.restrictions?.thirdPartyOnly, `${type} → thirdPartyOnly`).toBe(true);
+    }
+
     const newCust = normalizePlan(mk([{ type: 'OTHER', information: 'New and Moving Customers Only' }]))!;
     expect(newCust.restrictions?.newCustomerOnly).toBe(true);
 
@@ -162,6 +168,25 @@ describe('normalizePlan', () => {
     // Amber's EXISTING_SOLAR is a price-estimate ASSUMPTION, not a gate — must NOT flag.
     const amberEstimate = normalizePlan(mk([{ type: 'EXISTING_SOLAR', description: 'Usage price estimate based on a typical household solar system of 5kW.' }]))!;
     expect(amberEstimate.restrictions?.solarRequired).toBeFalsy();
+
+    // Flow Power packs a genuine gate AND an estimate caveat into one block. The gate sentence
+    // must set solar+battery+EV; the trailing estimate sentence must not suppress it.
+    const flow = normalizePlan(mk([{ information:
+      'Offer only available to customers with solar panels, battery, EV and smart meter. ' +
+      'Usage price estimate based on a typical household solar system of 5kW, battery system of 12.5kWh and an EV.' }]))!;
+    expect(flow.restrictions?.solarRequired).toBe(true);
+    expect(flow.restrictions?.batteryRequired).toBe(true);
+    expect(flow.restrictions?.evRequired).toBe(true);
+
+    // Amber's "No Solar or Battery" estimate caveat is the OPPOSITE of a requirement — the phrase
+    // "households without a solar or battery system" must not be read as solar/battery-required.
+    const amberNoSolar = normalizePlan(mk([{ information: 'No Solar or Battery', description: 'The pricing estimate is for households without a solar or battery system.' }]))!;
+    expect(amberNoSolar.restrictions?.solarRequired).toBeFalsy();
+    expect(amberNoSolar.restrictions?.batteryRequired).toBeFalsy();
+
+    // "solar feed-in tariff eligibility" is an incidental FiT mention, NOT a requirement to own panels.
+    const fitMention = normalizePlan(mk([{ information: 'Distribution zone', description: 'Applicable to a Residential Customer who agrees to eBilling. See terms for other eligibility criteria, including solar feed-in tariff eligibility.' }]))!;
+    expect(fitMention.restrictions?.solarRequired).toBeFalsy();
   });
 
   it('blends seasonal tariffPeriods by day-coverage (1st Opal peak)', () => {
@@ -288,7 +313,7 @@ describe('normalizePlan', () => {
     expect(p.touRates).toBeUndefined();
   });
 
-  it('flags a Flow Power variable plan but NOT its conventional Single Rate / TOU plans', () => {
+  it('never spot-models Flow Power — its "variable" prices are a monthly pool adjustment, not passthrough', () => {
     const flow = (displayName: string): RawPlanDetail => ({
       planId: 'F',
       brandName: 'Flow Power',
@@ -300,9 +325,57 @@ describe('normalizePlan', () => {
         tariffPeriod: [{ rateBlockUType: 'singleRate', singleRate: { rates: [{ unitPrice: '0.3' }] } }],
       },
     });
-    expect(normalizePlan(flow('Flow Home FY26: Variable Prices (estimate)'))!.variableWholesale).toBe(true);
+    // Flow Power's pool-based pricing can't be modelled from wholesale, so we keep its published
+    // flat CDR rate and never flag it as variable-wholesale — even the "Variable Prices" estimate.
+    expect(normalizePlan(flow('Flow Home FY26: Variable Prices (estimate)'))!.variableWholesale).toBeUndefined();
     expect(normalizePlan(flow('Flow Home - Single Rate'))!.variableWholesale).toBeUndefined();
     expect(normalizePlan(flow('Flow Home - TOU'))!.variableWholesale).toBeUndefined();
+  });
+
+  it('infers Flow Power hardware requirements from the plan NAME (CDR eligibility is inconsistent/empty)', () => {
+    const flow = (displayName: string, eligibility?: { type?: string; information?: string; description?: string }[]): RawPlanDetail => ({
+      planId: 'F',
+      brandName: 'Flow Power',
+      displayName,
+      type: 'MARKET',
+      geography: { distributors: ['Endeavour'] },
+      electricityContract: {
+        pricingModel: 'SINGLE_RATE',
+        tariffPeriod: [{ rateBlockUType: 'singleRate', singleRate: { rates: [{ unitPrice: '0.3' }] } }],
+        eligibility,
+      },
+    });
+
+    // Empty eligibility[] (the Endeavour bug) — requirement must still come from the name.
+    const battSolar = normalizePlan(flow('Flow Home Battery + Solar: Variable Prices (estimate)'))!;
+    expect(battSolar.restrictions?.solarRequired).toBe(true);
+    expect(battSolar.restrictions?.batteryRequired).toBe(true);
+    expect(battSolar.restrictions?.evRequired).toBeFalsy();
+
+    // EXISTING_SOLAR/BATTERY types with estimate-only descriptions (which estimateOnly would suppress)
+    // still resolve via the name.
+    const withTypes = normalizePlan(flow('Flow Home Battery + Solar: Variable Prices (estimate)', [
+      { type: 'EXISTING_SOLAR', description: 'Usage price estimate based on a typical household solar system of 5kW.' },
+      { type: 'EXISTING_BATTERY', description: 'Usage price estimate based on a typical household battery system of 12.5kWh.' },
+    ]))!;
+    expect(withTypes.restrictions?.solarRequired).toBe(true);
+    expect(withTypes.restrictions?.batteryRequired).toBe(true);
+
+    // EV in the name → evRequired.
+    const ev = normalizePlan(flow('FH Battery + Solar + EV: Variable Prices (estimate)'))!;
+    expect(ev.restrictions).toMatchObject({ solarRequired: true, batteryRequired: true, evRequired: true });
+
+    // Conventional Flow plans (no hardware token in the name) stay unrestricted.
+    expect(normalizePlan(flow('Flow Home - Single Rate'))!.restrictions).toBeUndefined();
+    expect(normalizePlan(flow('Flow Home FY26: Variable Prices (estimate)'))!.restrictions).toBeUndefined();
+
+    // A NON-Flow retailer with "Solar" in the name must NOT be gated (Amber's spot plan assumes solar).
+    const amber: RawPlanDetail = {
+      planId: 'A', brandName: 'Amber Electric', displayName: 'Amber Solar: Variable Prices', type: 'MARKET',
+      geography: { distributors: ['Endeavour'] },
+      electricityContract: { pricingModel: 'SINGLE_RATE', tariffPeriod: [{ rateBlockUType: 'singleRate', singleRate: { rates: [{ unitPrice: '0.3' }] } }] },
+    };
+    expect(normalizePlan(amber)!.restrictions?.solarRequired).toBeFalsy();
   });
 
   it('leaves an ordinary retailer untouched (not variable-wholesale)', () => {

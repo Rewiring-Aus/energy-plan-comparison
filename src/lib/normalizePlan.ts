@@ -198,38 +198,72 @@ function parseRestrictions(elig: RawEligibility[]): {
     thirdPartyOnly: false,
     solarRequired: false,
     batteryRequired: false,
+    evRequired: false,
     seniorCard: false,
   };
+
+  // A sentence that GATES eligibility ("only available to customers with…", "you must have…",
+  // "net metered solar…") as opposed to a pricing-ESTIMATE assumption ("usage estimate based on a
+  // typical 5kW solar system"). Retailers like Flow Power put BOTH in one eligibility block — a real
+  // hardware requirement AND an estimate caveat — so we split into sentences and only trust gate
+  // sentences for the solar/battery/EV requirements. Amber tags plans EXISTING_SOLAR but its text is
+  // just an estimate assumption (no gate sentence), so those must NOT read as a requirement.
+  // NB: the "with"/"to"/"for" tokens end in \b so they don't match inside "without"/"together" —
+  // "households without a solar or battery system" is an estimate caveat, NOT a gate.
+  const isGate = (s: string) =>
+    /only available|available (only )?(to|for)\b|must (have|own|be)|you (need|must)|require|eligib|customers? (with\b|who)|households? with\b|net metered|qualifying solar/.test(s);
+  const isEstimate = (s: string) => /estimate|based on|typical|assum|average/.test(s);
+
   for (const e of elig) {
     const type = (e.type || '').toUpperCase();
     const text = `${e.information ?? ''} ${e.description ?? ''}`.toLowerCase();
     if (e.information) notes.push(e.information);
 
-    const negated = /non-?solar|without (a |an )?(solar|battery)|no (solar|battery)|not .{0,20}(solar|battery)/.test(text);
-    // Amber tags wholesale plans EXISTING_SOLAR/BATTERY but the text is a price-estimate
-    // ASSUMPTION ("estimate based on a typical solar system"), not an eligibility gate.
-    const isEstimateAssumption = /estimate|based on|typical|assum/.test(text);
-    if (type === 'THIRD_PARTY_ONLY' || /member|rewards|velocity|partner|qantas|nrma|racv|bp /.test(text))
+    // Membership/partner gating: the CDR enum carries this cleanly (ORG_MEMBER, LOYALTY_MEMBER,
+    // SPORT_CLUB_MEMBER, THIRD_PARTY_ONLY — 983 plans across the national set), so prefer the
+    // structured type. The free-text matcher is a fallback for retailers who use type=OTHER.
+    if (
+      type === 'THIRD_PARTY_ONLY' || type === 'ORG_MEMBER' || type === 'LOYALTY_MEMBER' || type === 'SPORT_CLUB_MEMBER' ||
+      /member|rewards|velocity|partner|qantas|nrma|racv|bp /.test(text)
+    )
       r.thirdPartyOnly = true;
     if (type === 'NEW_CUSTOMER' || /new (and moving |residential )?customer|new to|moving in|move-?in/.test(text))
       r.newCustomerOnly = true;
     if (type === 'SENIOR_CARD' || type === 'PENSIONER' || /senior|pension|concession/.test(text))
       r.seniorCard = true;
-    // Require positive "you own/have solar" phrasing — not incidental, negated, or estimate text.
-    if (
-      !isEstimateAssumption &&
-      (type === 'EXISTING_SOLAR' ||
-        (!negated && /(with|have|having|own|existing|install(ed|ing)?).{0,20}solar|solar (pv|system|panel|panels)/.test(text)))
-    )
-      r.solarRequired = true;
-    if (
-      !isEstimateAssumption &&
-      (type === 'EXISTING_BATTERY' ||
-        (!negated && /(with|have|having|own|existing|install(ed|ing)?).{0,20}battery|battery (system|installed)/.test(text)))
-    )
-      r.batteryRequired = true;
+
+    // Hardware requirements (solar/battery/EV). NB the CDR enum is sparse here — `type: OTHER`
+    // outnumbers the typed values ~9:1, EXISTING_SOLAR covers only ~1/3 of real solar gates, and
+    // there is NO EV type at all — so this free-text pass is load-bearing, not decoration. It is
+    // deliberately FROZEN: do not add more heuristics chasing new phrasings. When it's wrong, LOOSEN
+    // (fewer false positives), never tighten. As the AER fills in EXISTING_* over time this shrinks.
+    // Only a GATE sentence counts, never a pricing-estimate assumption
+    // (e.g. "the pricing estimate is for households without a solar or battery system").
+    const gates = text.split(/[.;]+/).map((s) => s.trim()).filter((s) => s && isGate(s) && !isEstimate(s));
+    // Suppress the CDR type flag when the ONLY textual evidence is an estimate assumption (Amber).
+    // Empty text keeps the flag — ENGIE/EnergyAustralia/AGL tag EXISTING_SOLAR with no note at all.
+    const estimateOnly = text.trim() !== '' && isEstimate(text) && gates.length === 0;
+
+    if (type === 'EXISTING_SOLAR' && !estimateOnly) r.solarRequired = true;
+    if (type === 'EXISTING_BATTERY' && !estimateOnly) r.batteryRequired = true;
+    // Within a gate sentence, only OWNING the hardware counts — "solar (pv|system|panel)" or an
+    // ownership verb near the keyword. This rejects incidental mentions like "solar feed-in tariff
+    // eligibility" (that's about FiT eligibility, not a requirement to have panels).
+    const OWN = String.raw`(with|have|having|own|owning|existing|install(ed|ing)?|require[sd]?|qualifying)\b[\w\s,&()/-]{0,40}?\b`;
+    for (const s of gates) {
+      const solarOwn = new RegExp(`\\bsolar[- ](pv|system|panel|panels|customer|inverter|installation)|${OWN}solar\\b`).test(s);
+      if (solarOwn && !/non-?solar|without (a |an )?solar|no solar\b/.test(s)) r.solarRequired = true;
+      const batteryOwn = new RegExp(`\\bbatter(y|ies)[- ]?(system|storage|pack)|${OWN}batter`).test(s);
+      if (batteryOwn && !/without (a |an )?batter|no batter/.test(s)) r.batteryRequired = true;
+      if (
+        (/\bev\b|\bevs\b|electric vehicle/.test(s)) &&
+        !/without (an? )?(ev|electric vehicle)|no (ev|electric vehicle)/.test(s)
+      )
+        r.evRequired = true;
+    }
   }
-  const any = r.newCustomerOnly || r.thirdPartyOnly || r.solarRequired || r.batteryRequired || r.seniorCard;
+  const any =
+    r.newCustomerOnly || r.thirdPartyOnly || r.solarRequired || r.batteryRequired || r.evRequired || r.seniorCard;
   return { restrictions: any ? r : undefined, notes };
 }
 export interface RawPlanDetail {
@@ -362,21 +396,46 @@ function demandPerDay(amount: number, measurementPeriod?: string): number {
 // --- Main -------------------------------------------------------------------
 
 /**
- * A spot-passthrough plan (Amber, GloBird WHOLESAVE, Flow Power, …). "variable" alone is too broad
+ * A spot-passthrough plan (Amber, GloBird WHOLESAVE). "variable" alone is too broad
  * (many ordinary market plans say "variable rate"), so we require an explicit wholesale/spot marker.
+ * Flow Power has monthly pool-based pricing (not spot passthrough) — excluded here, treated as flat rate.
  */
 function isVariableWholesale(raw: RawPlanDetail): boolean {
   // Standing/regulated offers are the DMO *reference* tariff — always conventional set rates, never
   // spot. Amber/Flow publish these alongside their market products (e.g. "Standing Offer: TOU").
   if (raw.type === 'STANDING' || raw.type === 'REGULATED') return false;
   const brand = `${raw.brandName ?? ''} ${raw.brand ?? ''}`.toLowerCase();
+  const displayName = (raw.displayName ?? '').toLowerCase();
+
+  // Flow Power uses monthly pool-based adjustments, not spot passthrough — exclude it.
+  if (/\bflow\s*power\b/.test(brand)) return false;
+
   // Retailers whose ENTIRE market book is spot-passthrough (their plan names don't always say so).
   if (/\bamber\b|powerclub|localvolts/.test(brand)) return true;
-  // Everyone else sells wholesale on SPECIFIC plans only, so match the plan name — e.g. Flow Power
-  // has "Variable Prices (estimate)" spot plans AND conventional "Single Rate"/"TOU" plans (which
-  // must NOT match), and GloBird's spot plan is "WHOLESAVE". "variable" alone is too broad (many
-  // ordinary market plans are "variable rate"), so require "variable price"/"(estimate"/wholesale.
-  return /\bwholesale\b|\bspot\b|wholesave|real[- ]?time|variable price|\(estimate/.test(`${brand} ${(raw.displayName ?? '').toLowerCase()}`);
+  // Everyone else sells wholesale on SPECIFIC plans only, so match the plan name — e.g.
+  // GloBird's spot plan is "WHOLESAVE". "variable" alone is too broad (many ordinary market plans
+  // are "variable rate"), so require "wholesale"/"spot"/wholesave/real-time markers.
+  return /\bwholesale\b|\bspot\b|wholesave|real[- ]?time/.test(`${brand} ${displayName}`);
+}
+
+/**
+ * Flow Power names its hardware-gated products descriptively ("Flow Home Battery + Solar",
+ * "FH Battery + Solar + EV") but its structured CDR eligibility is INCONSISTENT: some plan instances
+ * carry EXISTING_SOLAR/EXISTING_BATTERY type flags, others under the same name carry none, and the
+ * descriptions are estimate assumptions that our estimateOnly guard suppresses (to avoid Amber false
+ * positives). The plan NAME is the one reliable, per-instance signal, so infer the solar/battery/EV
+ * requirement from it. **Scoped to Flow Power** — a general name rule would wrongly gate Amber and
+ * other retailers' "Solar"-named spot plans, where the hardware is assumed for the estimate, not required.
+ */
+function nameRequirements(raw: RawPlanDetail): Partial<import('../types').PlanRestrictions> | null {
+  const brand = `${raw.brandName ?? ''} ${raw.brand ?? ''}`.toLowerCase();
+  if (!/\bflow[\s-]*power\b/.test(brand)) return null;
+  const name = (raw.displayName ?? '').toLowerCase();
+  const out: Partial<import('../types').PlanRestrictions> = {};
+  if (/\bsolar\b/.test(name)) out.solarRequired = true;
+  if (/\bbattery\b/.test(name)) out.batteryRequired = true;
+  if (/\bev\b/.test(name)) out.evRequired = true;
+  return Object.keys(out).length ? out : null;
 }
 
 /**
@@ -547,6 +606,16 @@ export function normalizePlan(raw: RawPlanDetail): Plan | null {
     const { restrictions, notes } = parseRestrictions(c.eligibility);
     if (restrictions) plan.restrictions = restrictions;
     if (notes.length) plan.eligibilityNotes = notes;
+  }
+  // Flow Power's requirement lives in the plan NAME (its structured CDR eligibility is inconsistent).
+  const nameReq = nameRequirements(raw);
+  if (nameReq) {
+    plan.restrictions = {
+      newCustomerOnly: false, thirdPartyOnly: false, solarRequired: false,
+      batteryRequired: false, evRequired: false, seniorCard: false,
+      ...plan.restrictions, // keep anything parsed from eligibility[]…
+      ...nameReq, //           …then OR in the name-derived requirements (only ever sets true)
+    };
   }
   if (c.greenPowerCharges) plan.greenPower = true;
   const hasExitFee = c.fees?.some((f) => /EXIT|TERMIN/i.test(f.type ?? ''));

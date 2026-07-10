@@ -50,6 +50,7 @@ export interface PlanRestrictions {
   thirdPartyOnly: boolean; // partner / membership / third-party gated
   solarRequired: boolean;
   batteryRequired: boolean;
+  evRequired: boolean; // requires an EV / electric vehicle (e.g. Flow Power's EV plans)
   seniorCard: boolean; // seniors / pensioner / concession
 }
 
