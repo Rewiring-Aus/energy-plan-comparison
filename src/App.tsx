@@ -1,5 +1,5 @@
 import './styles/global.css';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useUsageStore, baselineDaily } from './store/usageStore';
 import { rankPlans, rankPlansOptimised, costPlanOptimised, computeCost } from './lib/costEngine';
 import type { SynthInput } from './lib/usageModel';
@@ -8,7 +8,6 @@ import { stateForPostcode } from './data/energyModel';
 import { HomeModelSentence } from './components/UsageBuilder/HomeModelSentence';
 import { HourlyProfileEditor } from './components/UsageBuilder/HourlyProfileEditor';
 import { PlanList } from './components/PlanList/PlanList';
-import { CurrentPlanPicker } from './components/PlanList/CurrentPlanPicker';
 
 export default function App() {
   const period = useUsageStore((s) => s.period);
@@ -25,6 +24,10 @@ export default function App() {
   const filters = useUsageStore((s) => s.filters);
   const currentPlanId = useUsageStore((s) => s.currentPlanId);
   const manualProfile = useUsageStore((s) => s.manualProfile);
+
+  // The Your Home panel collapses once plans are shown (so the usage graph below it comes into
+  // view); it can be reopened with "Edit your home".
+  const [homeOpen, setHomeOpen] = useState(true);
 
   // Bill the hand-edited scenario when one exists, otherwise the derived profile.
   const activeProfile = manualProfile ?? profile;
@@ -87,14 +90,11 @@ export default function App() {
               you see if you can move your energy usage around during the day to save more on your bills.
             </p>
           </header>
-          <HomeModelSentence />
+          <HomeModelSentence open={homeOpen} collapsible={showPlans} onToggle={() => setHomeOpen((o) => !o)} />
           {showPlans && <HourlyProfileEditor activePlan={activePlan} activeResult={activeResult} />}
         </div>
 
         <div className="right-col">
-          <div className={currentPlanId ? undefined : 'current-sticky'}>
-            <CurrentPlanPicker plans={plans} />
-          </div>
           {showPlans ? (
             <PlanList
               ranked={ranked}
@@ -106,14 +106,20 @@ export default function App() {
             />
           ) : (
             <div className="reveal-cta">
-              <p className="reveal-lead">Ready when you are.</p>
+              <p className="reveal-lead">Once you've set up your home, let's see if we can save.</p>
               <p className="reveal-sub">
-                Pick your current plan above to see your savings, then we'll rank all{' '}
-                <strong>{plans.length}</strong> plans on the <strong>{dnsp ?? 'your'}</strong>{' '}
-                network for your home and let you shape your usage to see how time-of-use rates
-                change the bill.
+                See a fully ranked list of the <strong>{plans.length}</strong> plans available to you
+                on the <strong>{dnsp ?? 'your'}</strong> network, and find out if moving your energy
+                usage during the day could save you more.
               </p>
-              <button className="reveal-btn" onClick={() => setShowPlans(true)} disabled={!dnsp}>
+              <button
+                className="reveal-btn"
+                onClick={() => {
+                  setShowPlans(true);
+                  setHomeOpen(false);
+                }}
+                disabled={!dnsp}
+              >
                 Show my energy plan options →
               </button>
             </div>

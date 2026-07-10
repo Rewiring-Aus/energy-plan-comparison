@@ -63,7 +63,6 @@ export function PlanList({ ranked, activePlanId, currentResult, dnsp, postcode, 
   }, [ranked]);
 
   const cheapest = ranked[0]?.total ?? 0;
-  const dearest = ranked[ranked.length - 1]?.total ?? 0;
   const listRef = useFlip<HTMLDivElement>();
   const currentPlan = currentResult ? PLAN_BY_ID.get(currentResult.planId) : undefined;
   const saving = currentResult ? currentResult.total - cheapest : 0;
@@ -94,25 +93,13 @@ export function PlanList({ ranked, activePlanId, currentResult, dnsp, postcode, 
         </div>
       )}
 
-      <h2
-        className="panel-title"
-        style={{ color: 'var(--purple)', fontWeight: 700, fontSize: 18, margin: '4px 0 4px' }}
-      >
-        {dnsp ? `${dnsp} plans, cheapest first` : 'Enter a postcode to see plans'}
-      </h2>
-      {dnsp ? (
-        <p className="plan-count">
-          Postcode <strong>{postcode}</strong> · <strong>{ranked.length}</strong> of {total} plans from{' '}
-          <strong>{groups.length}</strong> retailers · spread of{' '}
-          <strong>${Math.round(dearest - cheapest).toLocaleString('en-AU')}</strong>
-        </p>
-      ) : (
+      {!dnsp && (
         <p className="plan-count">
           Postcode <strong>{postcode}</strong> isn't matched to a distribution network in our data.
         </p>
       )}
 
-      <PlanFilters />
+      <PlanFilters shown={ranked.length} total={total} area={dnsp ?? undefined} />
 
       <div className="plan-list" ref={listRef}>
         {groups.slice(0, SHOW).map((g, i) => (

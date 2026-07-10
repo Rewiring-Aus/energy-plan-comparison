@@ -2,6 +2,7 @@ import { useUsageStore, baselineDaily } from '../../store/usageStore';
 import { BlankInput } from '../ui/BlankInput';
 import { BlankSelect } from '../ui/BlankSelect';
 import { RoughBox } from '../ui/RoughBox';
+import { CurrentPlanPicker } from '../PlanList/CurrentPlanPicker';
 import { dailyToPeriodKwh } from '../../lib/usageModel';
 import { estimatedDailyKwh } from '../../data/applianceProfiles';
 import { stateForPostcode } from '../../data/energyModel';
@@ -41,7 +42,15 @@ const PERIOD_OPTS = [
   { value: 'annual', label: 'year' },
 ] as const;
 
-export function HomeModelSentence() {
+interface HomeModelSentenceProps {
+  /** Whether the panel is expanded. */
+  open?: boolean;
+  /** Show the collapse control in the header (only meaningful once plans are shown). */
+  collapsible?: boolean;
+  onToggle?: () => void;
+}
+
+export function HomeModelSentence({ open = true, collapsible = false, onToggle }: HomeModelSentenceProps) {
   const { home, setHome, postcode, setPostcode, period, setPeriod, baselineAmount, setBaseline } =
     useUsageStore();
 
@@ -52,9 +61,37 @@ export function HomeModelSentence() {
   const periodScale = period === 'annual' ? 12 : period === 'quarterly' ? 3 : 1;
   const sliderMax = 2000 * periodScale;
 
+  // The heading + toggle live in a fixed header row so "Your home" never shifts between the
+  // collapsed recap and the full form — only the content below the header swaps.
+  const periodLabel = period === 'annual' ? 'year' : period === 'quarterly' ? 'quarter' : 'month';
+  const usage = Math.round(baselineAmount ?? estPeriod).toLocaleString('en-AU');
+
+  if (!open) {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <h2>Your home</h2>
+          <button className="home-hide-btn" onClick={onToggle}>
+            Edit your home ▾
+          </button>
+        </div>
+        <p className="home-collapsed-recap">
+          {postcode || '—'} · {home.occupants} {home.occupants === 1 ? 'person' : 'people'} · {usage} kWh/{periodLabel}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="panel">
-      <h2>Your home</h2>
+      <div className="panel-head">
+        <h2>Your home</h2>
+        {collapsible && (
+          <button className="home-hide-btn" onClick={onToggle}>
+            Hide ▴
+          </button>
+        )}
+      </div>
 
       <p className="sentence">
         <span className="lead">We live in postcode</span>{' '}
@@ -72,10 +109,7 @@ export function HomeModelSentence() {
             />
           </span>
         </RoughBox>
-        .
-      </p>
-
-      <p className="sentence">
+        .{' '}
         <span className="lead">We're</span>{' '}
         <BlankSelect value={home.occupants} options={OCCUPANTS} numeric onChange={(v) => setHome({ occupants: v })} seed={21} />{' '}
         people with{' '}
@@ -172,6 +206,8 @@ export function HomeModelSentence() {
             : 'Using your number. Clear it to fall back to the estimate from your home.'}
         </p>
       </div>
+
+      <CurrentPlanPicker />
     </div>
   );
 }

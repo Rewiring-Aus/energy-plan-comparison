@@ -7,7 +7,7 @@ const TARIFF_OPTS: { value: TariffKind; label: string }[] = [
   { value: 'VARIABLE', label: 'Variable' },
 ];
 
-export function PlanFilters() {
+export function PlanFilters({ shown, total, area }: { shown: number; total: number; area?: string }) {
   const f = useUsageStore((s) => s.filters);
   const setFilter = useUsageStore((s) => s.setFilter);
   const [open, setOpen] = useState(false);
@@ -29,6 +29,10 @@ export function PlanFilters() {
         <span className="filters-caret">{open ? '▾' : '▸'}</span>
         Filters
         {active > 0 && <span className="filters-active">{active} on</span>}
+        <span className="filters-shown">
+          {area && <>Showing <strong>{area}</strong> area · </>}
+          <strong>{shown.toLocaleString('en-AU')}</strong> of {total.toLocaleString('en-AU')} plans
+        </span>
       </button>
 
       {open && (

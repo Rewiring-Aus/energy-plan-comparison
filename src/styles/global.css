@@ -209,6 +209,34 @@ body {
   color: var(--purple);
   margin: 0 0 14px;
 }
+/* header row: heading + optional "Hide" collapse control */
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.panel-head h2 {
+  margin: 0;
+}
+.home-hide-btn {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--purple);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+/* collapsed Your Home — one-line recap under the fixed header */
+.home-collapsed-recap {
+  margin: 0;
+  font-size: 15px;
+  color: var(--body);
+}
 
 .sentence {
   font-size: 19px;
@@ -276,9 +304,7 @@ body {
 
 /* ---- usage total (bottom of Your Home) ---- */
 .usage-total {
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px dashed #cfc7b8;
+  margin-top: 10px;
 }
 .dnsp-inline {
   font-weight: 400;
@@ -664,18 +690,11 @@ body {
   padding: 12px 14px;
   margin-bottom: 12px;
 }
-/* solid so it stays legible over the scrolling list while sticky */
-.current-picker {
-  background: #efe9dd;
-  border-radius: var(--radius);
-  padding: 12px 14px;
-  margin-bottom: 24px;
-}
-.current-picker-note {
-  font-size: 12px;
-  color: var(--muted);
-  margin: 0 0 10px;
-  font-style: italic;
+/* current plan — an optional fill-in-the-blanks line at the foot of Your Home */
+.current-plan-setup {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed #cfc7b8;
 }
 .filters-row {
   display: flex;
@@ -712,6 +731,17 @@ body {
 }
 .filters-caret {
   font-size: 11px;
+}
+/* live filtered count on the collapsed filters topline */
+.filters-shown {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.filters-shown strong {
+  color: var(--ink);
+  font-weight: 700;
 }
 .filters-active {
   font-size: 11px;
@@ -799,45 +829,14 @@ body {
   color: var(--muted);
   margin: 10px 0 0;
 }
-.current-picker-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-.current-picker-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink);
-}
-.picker-select {
-  font: inherit;
-  font-size: 13px;
-  color: var(--purple);
-  background: #fff;
-  border: 1.5px solid var(--purple);
-  border-radius: 6px;
-  padding: 5px 8px;
-  max-width: 240px;
-}
 .picker-clear {
   border: none;
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   text-decoration: underline;
   cursor: pointer;
-}
-
-/* the current-plan picker sticks to the top until a plan is chosen */
-.current-sticky {
-  position: sticky;
-  top: 10px;
-  z-index: 6;
-}
-.current-sticky .current-picker {
-  box-shadow: 0 4px 14px rgba(40, 40, 70, 0.18);
 }
 
 /* ---- savings banner + current plan card ---- */
