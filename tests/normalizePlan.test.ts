@@ -158,6 +158,11 @@ describe('normalizePlan', () => {
     const senior = normalizePlan(mk([{ type: 'SENIOR_CARD', information: 'Seniors Card holders' }]))!;
     expect(senior.restrictions?.seniorCard).toBe(true);
 
+    // GloBird "sophisticated investor" plans require you to be a NON-pensioner with no concession
+    // card — the opposite of a seniors plan, so must not be flagged seniorCard.
+    const sophInvestor = normalizePlan(mk([{ type: 'OTHER', information: 'Additional Eligibility', description: 'Must be a Sophisticated Investor or non-pensioner. No concession card or Centrelink. Income over $80k.' }]))!;
+    expect(sophInvestor.restrictions?.seniorCard).toBeFalsy();
+
     const solar = normalizePlan(mk([{ type: 'OTHER', information: 'Solar System', description: 'must have a solar system installed' }]))!;
     expect(solar.restrictions?.solarRequired).toBe(true);
 
@@ -189,13 +194,15 @@ describe('normalizePlan', () => {
     expect(fitMention.restrictions?.solarRequired).toBeFalsy();
   });
 
-  it('blends seasonal tariffPeriods by day-coverage (1st Opal peak)', () => {
-    const peak = (price: string, start: string, end: string) => ({
+  it('collapses seasonal tariffPeriods into one annual-average, non-overlapping TOU', () => {
+    const ALL = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+    const season = (peakPrice: string, start: string, end: string) => ({
       rateBlockUType: 'timeOfUseRates' as const,
       startDate: start,
       endDate: end,
       timeOfUseRates: [
-        { type: 'PEAK', rates: [{ unitPrice: price }], timeOfUse: [{ days: ['MON'], startTime: '15:00', endTime: '20:59' }] },
+        { type: 'PEAK', rates: [{ unitPrice: peakPrice }], timeOfUse: [{ days: ALL, startTime: '15:00', endTime: '20:59' }] },
+        { type: 'OFF_PEAK', rates: [{ unitPrice: '0.20' }], timeOfUse: [{ days: ALL, startTime: '21:00', endTime: '14:59' }] },
       ],
     });
     const raw: RawPlanDetail = {
@@ -204,15 +211,19 @@ describe('normalizePlan', () => {
       electricityContract: {
         pricingModel: 'TIME_OF_USE',
         tariffPeriod: [
-          peak('0.174', '04-01', '05-31'), // 61 d
-          peak('0.437', '06-01', '08-31'), // 92 d
-          peak('0.174', '09-01', '10-31'), // 61 d
-          peak('0.437', '11-01', '03-31'), // 151 d
+          season('0.174', '04-01', '05-31'), // 61 d
+          season('0.437', '06-01', '08-31'), // 92 d
+          season('0.174', '09-01', '10-31'), // 61 d
+          season('0.437', '11-01', '03-31'), // 151 d
         ],
       },
     };
     const p = normalizePlan(raw)!;
-    const peakRate = p.touRates!.find((r) => r.label === 'PEAK')!.blocks[0].perKwh;
+    const tou = p.touRates!;
+    // Exactly one PEAK + one OFF_PEAK band (no seasonal duplicates / overlaps).
+    expect(tou.filter((r) => r.label === 'PEAK')).toHaveLength(1);
+    expect(tou.filter((r) => r.label === 'OFFPEAK')).toHaveLength(1);
+    const peakRate = tou.find((r) => r.label === 'PEAK')!.blocks[0].perKwh;
     // day-weighted (0.174*122 + 0.437*243)/365 ≈ 0.349, then ×1.1 GST ≈ 0.384
     expect(peakRate).toBeGreaterThan(0.36);
     expect(peakRate).toBeLessThan(0.41);

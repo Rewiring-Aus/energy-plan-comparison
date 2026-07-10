@@ -69,10 +69,72 @@ function seasonDays(tp: RawTariffPeriod): number {
   return b >= a ? b - a + 1 : 365 - a + 1 + b;
 }
 
+const WEEKDAY_NAMES = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
+const WEEKEND_NAMES = ['SAT', 'SUN'];
+
 /**
- * Plans can carry several *seasonal* tariffPeriods (e.g. 1st Opal: winter/summer peak 43.7c but
- * autumn/spring peak 17.4c). Picking the first silently under- or over-prices. Blend them into one
- * effective period by day-weighting each rate — grouped by band type + time window.
+ * The rate ($/kWh) a raw seasonal period charges at a given day-name + hour — narrowest matching TOU
+ * window, else an all-day/window-less set, else the period's single rate. Used to average seasons.
+ */
+function rawRateAt(tp: RawTariffPeriod, dayName: string, hour: number): number | undefined {
+  const sets = tp.timeOfUseRates;
+  if (!sets?.length) {
+    const s = tp.singleRate?.rates[0]?.unitPrice;
+    return s != null ? Number(s) : undefined;
+  }
+  let best: number | undefined;
+  let bestSpan = Infinity;
+  let allDay: number | undefined;
+  for (const set of sets) {
+    const price = Number(set.rates[0]?.unitPrice);
+    if (!Number.isFinite(price)) continue;
+    const tous = set.timeOfUse ?? [];
+    if (!tous.length) {
+      allDay = price;
+      continue;
+    }
+    for (const t of tous) {
+      if (!(t.days ?? []).includes(dayName)) continue;
+      const from = parseHour(t.startTime, false);
+      const to = parseHour(t.endTime, true);
+      const fl = Math.floor(from);
+      const tl = Math.ceil(to);
+      const inWin = fl <= tl ? hour >= fl && hour < tl : hour >= fl || hour < tl;
+      if (inWin) {
+        const span = to > from ? to - from : 24 + (to - from);
+        if (span < bestSpan) {
+          bestSpan = span;
+          best = price;
+        }
+      }
+    }
+  }
+  return best ?? allDay;
+}
+
+/** Contiguous [start,end) hour runs among the given (sorted-unique) hours, 0..24. */
+function hourRuns(hours: number[]): Array<[number, number]> {
+  const set = new Set(hours);
+  const out: Array<[number, number]> = [];
+  let s: number | null = null;
+  for (let h = 0; h <= 24; h++) {
+    const on = h < 24 && set.has(h);
+    if (on && s === null) s = h;
+    else if (!on && s !== null) {
+      out.push([s, h]);
+      s = null;
+    }
+  }
+  return out;
+}
+
+/**
+ * Plans can carry several *seasonal* tariffPeriods (e.g. Origin Standing: summer/winter peak 54.7c
+ * 3–9pm, but autumn/spring flat 21.9c). Keeping each season's windows would leave several
+ * overlapping TOU bands. Instead collapse to ONE annual (day-count-weighted) average rate per
+ * weekday/weekend hour, then rebuild clean non-overlapping bands from it — so the chart and cost see
+ * a single effective TOU. (Tiered/volume blocks within a seasonal TOU are rare; only the first
+ * block is averaged.) Single-rate seasons are day-weight blended as before.
  */
 function mergeTariffPeriods(periods: RawTariffPeriod[]): RawTariffPeriod {
   if (periods.length <= 1) return periods[0];
@@ -91,27 +153,47 @@ function mergeTariffPeriods(periods: RawTariffPeriod[]): RawTariffPeriod {
   };
 
   if (base.rateBlockUType === 'timeOfUseRates') {
-    // Group each period's TOU bands by type + window signature.
-    const groups = new Map<string, { set: RawTariffRateSet; prices: number[][]; ws: number[] }>();
-    periods.forEach((tp, i) => {
-      for (const set of tp.timeOfUseRates ?? []) {
-        const sig =
-          (set.type ?? '') + (set.timeOfUse ?? []).map((t) => `${t.startTime}-${t.endTime}`).join(',');
-        let g = groups.get(sig);
-        if (!g) groups.set(sig, (g = { set, prices: [], ws: [] }));
-        g.prices.push(set.rates.map((r) => Number(r.unitPrice)));
-        g.ws.push(weights[i]);
+    // Annual day-weighted average rate per (weekday/weekend, hour). Weekday uses MON as the
+    // representative day, weekend SAT — matching how the rest of the app treats day types.
+    const avg: Record<'WEEKDAY' | 'WEEKEND', number[]> = { WEEKDAY: [], WEEKEND: [] };
+    for (const [dt, rep] of [['WEEKDAY', 'MON'], ['WEEKEND', 'SAT']] as const) {
+      for (let h = 0; h < 24; h++) {
+        const vals: number[] = [];
+        const ws: number[] = [];
+        periods.forEach((tp, i) => {
+          const r = rawRateAt(tp, rep, h);
+          if (r != null) {
+            vals.push(r);
+            ws.push(weights[i]);
+          }
+        });
+        avg[dt][h] = Math.round(wavg(vals, ws) * 1e4) / 1e4; // round to 0.01c so near-equal hours merge
       }
-    });
+    }
+
+    // Distinct rate tiers → labels (dearest = PEAK, cheapest = OFF_PEAK, any in between = SHOULDER).
+    const allRates = [...new Set([...avg.WEEKDAY, ...avg.WEEKEND])].sort((a, b) => b - a);
+    if (allRates.length <= 1) {
+      // Averages out flat — emit a single rate rather than a one-band "TOU".
+      return { ...base, rateBlockUType: 'singleRate', singleRate: { rates: [{ unitPrice: String(allRates[0] ?? 0) }] }, timeOfUseRates: undefined };
+    }
+    const labelFor = (rate: number) => (rate === allRates[0] ? 'PEAK' : rate === allRates[allRates.length - 1] ? 'OFF_PEAK' : 'SHOULDER');
+    const hh = (h: number) => `${String(h % 24).padStart(2, '0')}:00`; // 24 -> "00:00" (midnight)
+
     const merged: RawTariffRateSet[] = [];
-    for (const g of groups.values()) {
-      const nBlocks = Math.max(...g.prices.map((p) => p.length));
-      const rates: RawRate[] = [];
-      for (let bi = 0; bi < nBlocks; bi++) {
-        const price = wavg(g.prices.map((p) => p[bi]), g.ws);
-        rates.push({ unitPrice: String(price), volume: g.set.rates[bi]?.volume });
+    for (const rate of allRates) {
+      const wdHours = Array.from({ length: 24 }, (_, h) => h).filter((h) => avg.WEEKDAY[h] === rate);
+      const weHours = Array.from({ length: 24 }, (_, h) => h).filter((h) => avg.WEEKEND[h] === rate);
+      if (!wdHours.length && !weHours.length) continue;
+      const sameBoth = wdHours.length === weHours.length && wdHours.every((h, i) => h === weHours[i]);
+      const tou: RawTimeOfUse[] = [];
+      if (sameBoth) {
+        for (const [s, e] of hourRuns(wdHours)) tou.push({ days: [...WEEKDAY_NAMES, ...WEEKEND_NAMES], startTime: hh(s), endTime: hh(e) });
+      } else {
+        for (const [s, e] of hourRuns(wdHours)) tou.push({ days: WEEKDAY_NAMES, startTime: hh(s), endTime: hh(e) });
+        for (const [s, e] of hourRuns(weHours)) tou.push({ days: WEEKEND_NAMES, startTime: hh(s), endTime: hh(e) });
       }
-      merged.push({ ...g.set, rates });
+      merged.push({ type: labelFor(rate), rates: [{ unitPrice: String(rate) }], timeOfUse: tou });
     }
     return { ...base, timeOfUseRates: merged };
   }
@@ -229,7 +311,11 @@ function parseRestrictions(elig: RawEligibility[]): {
       r.thirdPartyOnly = true;
     if (type === 'NEW_CUSTOMER' || /new (and moving |residential )?customer|new to|moving in|move-?in/.test(text))
       r.newCustomerOnly = true;
-    if (type === 'SENIOR_CARD' || type === 'PENSIONER' || /senior|pension|concession/.test(text))
+    // Seniors/concession gating. Guard against NEGATED mentions — GloBird's "sophisticated investor"
+    // plans say "non-pensioner. No concession card" (you must NOT hold one), the opposite of a
+    // seniors plan; those must not be flagged as seniorCard.
+    const seniorNeg = /non-?pension|no concession|not (a |an )?(pension|concession|senior)|without (a |an )?(pension|concession)/.test(text);
+    if (type === 'SENIOR_CARD' || type === 'PENSIONER' || (/senior|pension|concession/.test(text) && !seniorNeg))
       r.seniorCard = true;
 
     // Hardware requirements (solar/battery/EV). NB the CDR enum is sparse here — `type: OTHER`
