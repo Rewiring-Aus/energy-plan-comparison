@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { useUsageStore } from '../../store/usageStore';
-import { APPLIANCE_META, SOAK_HOURS } from '../../data/applianceProfiles';
+import { APPLIANCE_META } from '../../data/applianceProfiles';
 import { resolveTouRate, resolveFitRate } from '../../lib/time';
 import { billingDays } from '../../lib/costEngine';
 import type { BillingPeriod, CostResult, DayType, Plan, SolarEffectiveness, TouLabel, UsageProfile, Behaviours } from '../../types';
@@ -36,6 +36,16 @@ const BAND_COLOR: Record<string, string> = {
 function money(v: number): string {
   const r = Math.round(v);
   return r < 0 ? `−$${Math.abs(r).toLocaleString('en-AU')}` : `$${r.toLocaleString('en-AU')}`;
+}
+
+/** Interpolate between two #rrggbb colours (t clamped 0..1). */
+function lerpColor(a: string, b: string, t: number): string {
+  const p = (s: string) => [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16)];
+  const [ar, ag, ab] = p(a);
+  const [br, bg, bb] = p(b);
+  const k = Math.max(0, Math.min(1, t));
+  const h = (x: number, y: number) => Math.round(x + (y - x) * k).toString(16).padStart(2, '0');
+  return `#${h(ar, br)}${h(ag, bg)}${h(ab, bb)}`;
 }
 
 function BehaviourRow({ on, onToggle, title, blurb, children }: { on: boolean; onToggle: (v: boolean) => void; title: string; blurb: string; children?: ReactNode }) {
@@ -113,10 +123,9 @@ interface Props {
 }
 
 export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
-  const { profile, manualProfile, loads, solar, effectiveness, home, period, setEffectiveness, setManualImport, resetManual, behaviours, setBehaviour } =
+  const { profile, manualProfile, loads, effectiveness, home, period, setEffectiveness, setManualImport, resetManual, behaviours, setBehaviour } =
     useUsageStore();
   const [mode, setMode] = useState<Mode>('billed');
-  const [keepTotal, setKeepTotal] = useState(true);
 
   const eff = manualProfile ?? profile;
   const edited = manualProfile != null;
@@ -150,10 +159,6 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
 
       {mode === 'billed' && (
         <div className="edit-toolbar">
-          <label className="switch">
-            <input type="checkbox" checked={keepTotal} onChange={(e) => setKeepTotal(e.target.checked)} />
-            Keep daily total (shift load)
-          </label>
           <span className="edit-total">
             {impTotal.toFixed(1)} kWh/day
             {edited && Math.abs(impTotal - derivedTotal) > 0.05 && (
@@ -172,14 +177,14 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
       )}
 
       {mode === 'loads' ? (
-        <LoadsChart loads={loads} solar={solar} hasSolar={hasSolar} />
+        <LoadsChart loads={loads} />
       ) : (
         <BilledChart
           profile={eff}
           activePlan={activePlan}
           activeResult={activeResult}
           period={period}
-          onEdit={(h, v) => setManualImport(h, v, keepTotal)}
+          onEdit={(h, v) => setManualImport(h, v, true)}
         />
       )}
 
@@ -219,7 +224,7 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
         </div>
       )}
 
-      {mode === 'billed' && (
+      {(showHotWater || showHeatPump || showEv || home.poolPump || home.batteryKwh > 0) && (
         <div className="flexible-loads" style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed #cfc7b8' }}>
           <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--purple)', margin: '0 0 10px' }}>
             Flexible loads
@@ -321,24 +326,17 @@ const XLabels = () => (
   </>
 );
 
-/** "What's using power" — stacked appliance loads + solar line. */
-function LoadsChart({ loads, solar, hasSolar }: { loads: Record<string, number[]>; solar: number[]; hasSolar: boolean }) {
+/** "What's using power" — stacked appliance loads through the day. */
+function LoadsChart({ loads }: { loads: Record<string, number[]> }) {
   const cats = APPLIANCE_META.filter((c) => (loads[c.key] ?? []).some((v) => v > 0.001));
   const gross = Array.from({ length: 24 }, (_, h) => cats.reduce((s, c) => s + (loads[c.key][h] ?? 0), 0));
-  const maxY = Math.max(0.5, ...gross, ...(hasSolar ? solar : [])) * 1.1;
+  const maxY = Math.max(0.5, ...gross) * 1.1;
   const y = (v: number) => M.top + PLOT_H * (1 - Math.min(1, v / maxY));
-  const solarLine = solar.map((v, h) => `${M.left + h * SLOT + SLOT / 2},${y(v)}`).join(' ');
 
   return (
     <>
-      <p className="editor-meta">
-        Each bar is the power a load draws that hour; the <span style={{ color: '#b89a1f' }}>▬</span> line is
-        solar. The <span className="soak-key" /> band is the midday solar-soak window.
-      </p>
+      <p className="editor-meta">Each bar is the power your appliances draw that hour of the day.</p>
       <svg className="bar-chart" viewBox={`0 0 ${VW} ${VH}`}>
-        {SOAK_HOURS.map((h) => (
-          <rect key={`soak${h}`} x={M.left + h * SLOT} y={M.top} width={SLOT} height={PLOT_H} fill="#2b8a5b" opacity={0.1} />
-        ))}
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
             <line x1={M.left} x2={VW - M.right} y1={y(maxY * f)} y2={y(maxY * f)} stroke="#0001" />
@@ -363,7 +361,6 @@ function LoadsChart({ loads, solar, hasSolar }: { loads: Record<string, number[]
             </g>
           );
         })}
-        {hasSolar && <polyline points={solarLine} fill="none" stroke="#e0a020" strokeWidth={2} strokeDasharray="4 3" />}
         <XLabels />
       </svg>
       <div className="chart-legend">
@@ -372,14 +369,6 @@ function LoadsChart({ loads, solar, hasSolar }: { loads: Record<string, number[]
             <i className="sw" style={{ background: c.color }} /> {c.label}
           </span>
         ))}
-        {hasSolar && (
-          <span className="lg">
-            <svg width="20" height="8">
-              <line x1="0" y1="4" x2="20" y2="4" stroke="#e0a020" strokeWidth="2" strokeDasharray="4 3" />
-            </svg>{' '}
-            Solar
-          </span>
-        )}
       </div>
     </>
   );
@@ -412,7 +401,7 @@ function BilledChart({
   const flat = !touLabelAt(activePlan, 12, DISPLAY_DAY) && !touLabelAt(activePlan, 18, DISPLAY_DAY);
   const computedMaxImp = Math.max(0.5, ...imp) * (editable ? 1.25 : 1.1);
   const maxImp = frozenMax ?? computedMaxImp;
-  const maxExp = Math.max(0, ...exp) * 1.1;
+  const maxExp = Math.max(0, ...exp) * 1.45; // headroom at the bottom for the export watermark
   const totalRange = maxImp + maxExp;
   const zeroY = M.top + PLOT_H * (maxExp > 0 ? maxImp / totalRange : 1);
   const importH = Math.max(1, zeroY - M.top);
@@ -452,17 +441,30 @@ function BilledChart({
   // never double-shade. Then build the distinct periods (with cost) + each one's longest run of
   // hours, which is where we anchor its on-chart label.
   const flatRate = activePlan?.singleRate?.blocks[0]?.perKwh ?? activePlan?.touRates?.[0]?.blocks[0]?.perKwh ?? 0;
+  // Plans often carry several distinct "shoulder" windows at different prices; a single orange makes
+  // them indistinguishable, so scale shoulder bands from yellow (cheapest) to red (dearest) by price.
+  const shoulderRates = (flat ? [] : activePlan?.touRates ?? [])
+    .filter((r) => r.label === 'SHOULDER')
+    .map((r) => r.blocks[0]?.perKwh ?? 0);
+  const shMin = Math.min(...shoulderRates);
+  const shMax = Math.max(...shoulderRates);
+  // Yellow (cheapest shoulder) → orange (dearest). Stops short of the peak brick-red so a shoulder
+  // never reads as a peak band.
+  const shoulderColor = (rate: number) =>
+    shoulderRates.length < 2 || shMax === shMin ? TOU_FILL.SHOULDER : lerpColor('#eccb3f', '#e07a1e', (rate - shMin) / (shMax - shMin));
   const hourPeriod = (h: number, day: DayType): { key: string; name: string; color: string; rateC: number } => {
     if (isFreeHour(activePlan, h, day)) return { key: 'FREE', name: 'Free', color: FREE_FILL, rateC: 0 };
     if (!flat && activePlan?.touRates?.length) {
       const r = resolveTouRate(activePlan.touRates, h, day);
-      if (r)
+      if (r) {
+        const perKwh = r.blocks[0]?.perKwh ?? 0;
         return {
           key: `${r.label}#${activePlan.touRates.indexOf(r)}`,
           name: TOU_NAME[r.label],
-          color: TOU_FILL[r.label],
-          rateC: Math.round((r.blocks[0]?.perKwh ?? 0) * 100),
+          color: r.label === 'SHOULDER' ? shoulderColor(perKwh) : TOU_FILL[r.label],
+          rateC: Math.round(perKwh * 100),
         };
+      }
     }
     return { key: 'ANYTIME', name: 'Usage', color: FLAT_FILL, rateC: Math.round(flatRate * 100) };
   };
@@ -506,12 +508,42 @@ function BilledChart({
   const wholesaleKwh = [...periods.values()].reduce((s, p) => s + p.kwh, 0);
   const wholesaleCost = bandCost('WHOLESALE');
 
-  // Export rate line for variable wholesale plans with solar feed-in
-  const exportRates = activePlan?.solarFeedIn?.map((band) => resolveFitRate([band], 0, DISPLAY_DAY)) ?? [];
-  const hasExportRates = exportRates.length === 24 && exportRates.some((r) => r > 0);
+  // Feed-in ($/kWh) resolved PER HOUR from the plan's FiT bands. (The old code mapped over the bands
+  // and resolved each at hour 0, so all-but-one came back 0 — that's why Amber's line looked wrong.)
+  const fitBands = activePlan?.solarFeedIn ?? [];
+  const fitAt = (h: number) => resolveFitRate(fitBands, h, DISPLAY_DAY);
+  const exportRates = Array.from({ length: 24 }, (_, h) => fitAt(h));
+  const hasExportRates = exportRates.some((r) => r > 0);
   const maxExportRate = Math.max(0.01, ...exportRates);
-  const exportY = (h: number) => zeroY + ((exportRates[h] ?? 0) / maxExportRate) * (exportH * 0.75);
+  // Wholesale plans draw an hourly feed-in curve; the height maps rate → position in the export band.
+  const exportY = (h: number) => zeroY + (1 - (exportRates[h] ?? 0) / maxExportRate) * (exportH * 0.7) + exportH * 0.12;
   const exportLine = hasExportRates ? exportRates.map((_, h) => `${M.left + h * SLOT + SLOT / 2},${exportY(h)}`).join(' ') : '';
+
+  // Below-line feed-in sections (non-wholesale): group hours by feed-in rate, each with its own blue
+  // shade + a $ credit / kWh watermark, mirroring the import periods above the line.
+  const totalDays = days.weekday + days.weekend;
+  const expInfo = Array.from({ length: 24 }, (_, h) => {
+    const rate = fitAt(h);
+    return { key: `FIT#${Math.round(rate * 1000)}`, rate };
+  });
+  const expMaxRate = Math.max(0.01, ...expInfo.map((i) => i.rate));
+  const expColor = (rate: number) => lerpColor('#aecbef', '#1f5fb0', rate / expMaxRate);
+  const expPeriods = new Map<string, { key: string; rate: number; kwh: number; credit: number }>();
+  for (let h = 0; h < 24; h++) {
+    const e = Math.max(0, exp[h] ?? 0);
+    if (e <= 0.001) continue;
+    const info = expInfo[h];
+    const cur = expPeriods.get(info.key) ?? { key: info.key, rate: info.rate, kwh: 0, credit: 0 };
+    cur.kwh += e * totalDays;
+    cur.credit += e * info.rate * totalDays;
+    expPeriods.set(info.key, cur);
+  }
+  const expCenter = (key: string): number | null => {
+    const hs: number[] = [];
+    for (let h = 0; h < 24; h++) if (expInfo[h].key === key && (exp[h] ?? 0) > 0.001) hs.push(h);
+    return hs.length ? (hs[0] + hs[hs.length - 1] + 1) / 2 : null;
+  };
+  const totalExportKwh = exp.reduce((s, e) => s + Math.max(0, e), 0) * totalDays;
 
   return (
     <>
@@ -543,41 +575,28 @@ function BilledChart({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-        {/* Background: one tint for wholesale, else each hour tinted by its billing period. */}
+        {/* Import-region background: one tint for wholesale, else each hour tinted by its period. */}
         {wholesale ? (
-          <rect x={M.left} y={M.top} width={PLOT_W} height={PLOT_H} fill={WHOLESALE_FILL} opacity={0.1} />
+          <rect x={M.left} y={M.top} width={PLOT_W} height={importH} fill={WHOLESALE_FILL} opacity={0.1} />
         ) : (
           hourInfo.map((info, h) => (
-            <rect key={`bg${h}`} x={M.left + h * SLOT} y={M.top} width={SLOT} height={PLOT_H} fill={info.color} opacity={0.14} />
+            <rect key={`bg${h}`} x={M.left + h * SLOT} y={M.top} width={SLOT} height={importH} fill={info.color} opacity={0.14} />
           ))
         )}
-        {/* Watermark: aggregated wholesale usage, or one figure per TOU period. */}
-        {wholesale ? (
-          <g pointerEvents="none" fill={WHOLESALE_FILL} opacity={0.65} textAnchor="middle" fontWeight={900}>
-            <text x={M.left + PLOT_W * 0.28} y={M.top + 24} fontSize={22}>
-              {money(wholesaleCost)}
-            </text>
-            <text x={M.left + PLOT_W * 0.28} y={M.top + 41} fontSize={12}>
-              {Math.round(wholesaleKwh).toLocaleString('en-AU')} kWh
-            </text>
-          </g>
-        ) : (
-          [...periods.values()].map((p) => {
-            const run = bestRun.get(p.key)!;
-            const cx = clampX(M.left + ((run.start + run.end) / 2) * SLOT);
-            const cy = M.top + 24;
-            return (
-              <g key={`wm${p.key}`} pointerEvents="none" fill={p.color} opacity={0.65} textAnchor="middle" fontWeight={900}>
-                <text x={cx} y={cy} fontSize={22}>
-                  {money(p.cost)}
-                </text>
-                <text x={cx} y={cy + 17} fontSize={12}>
-                  {Math.round(p.kwh).toLocaleString('en-AU')} kWh
-                </text>
-              </g>
-            );
-          })
-        )}
+        {/* Export-region background: blue feed-in sections (each hour shaded by its feed-in rate). */}
+        {maxExp > 0 &&
+          exportH > 2 &&
+          Array.from({ length: 24 }, (_, h) => (
+            <rect
+              key={`ebg${h}`}
+              x={M.left + h * SLOT}
+              y={zeroY}
+              width={SLOT}
+              height={exportH}
+              fill={wholesale ? EXPORT_FILL : expColor(fitAt(h))}
+              opacity={0.12}
+            />
+          ))}
         <line x1={M.left} x2={VW - M.right} y1={zeroY} y2={zeroY} stroke="#333" strokeWidth={1} />
         <text className="axis-label" x={2} y={M.top + 8}>
           {maxImp.toFixed(1)}
@@ -591,13 +610,7 @@ function BilledChart({
           const x = M.left + h * SLOT + BAR_PAD;
           const i = Math.max(0, imp[h] ?? 0);
           const e = Math.max(0, exp[h] ?? 0);
-          const fill = wholesale
-            ? WHOLESALE_FILL
-            : isFreeHour(activePlan, h, DISPLAY_DAY)
-              ? FREE_FILL
-              : flat || !touLabelAt(activePlan, h, DISPLAY_DAY)
-                ? FLAT_FILL
-                : TOU_FILL[touLabelAt(activePlan, h, DISPLAY_DAY)!];
+          const fill = wholesale ? WHOLESALE_FILL : hourInfo[h].color;
           return (
             <g key={h}>
               {i > 0.001 && <rect x={x} y={yImp(i)} width={BAR_W} height={zeroY - yImp(i)} fill={fill} rx={1.5} />}
@@ -624,6 +637,66 @@ function BilledChart({
               onPointerDown={(e) => startDrag(h, e)}
             />
           ))}
+        {/* Watermarks paint AFTER the bars (on top) with a white halo, so the $/kWh figures stay
+            legible over tall bars. pointerEvents:none keeps the bars draggable underneath. */}
+        {wholesale ? (
+          <g pointerEvents="none" fill={WHOLESALE_FILL} stroke="#fff" strokeWidth={3.5} strokeLinejoin="round" paintOrder="stroke" opacity={0.92} textAnchor="middle" fontWeight={900}>
+            <text x={M.left + PLOT_W * 0.28} y={M.top + 22} fontSize={22}>
+              {money(wholesaleCost)}
+            </text>
+            <text x={M.left + PLOT_W * 0.28} y={M.top + 39} fontSize={12}>
+              {Math.round(wholesaleKwh).toLocaleString('en-AU')} kWh
+            </text>
+          </g>
+        ) : (
+          [...periods.values()].map((p) => {
+            const run = bestRun.get(p.key)!;
+            const cx = clampX(M.left + ((run.start + run.end) / 2) * SLOT);
+            return (
+              <g key={`wm${p.key}`} pointerEvents="none" fill={p.color} stroke="#fff" strokeWidth={3.5} strokeLinejoin="round" paintOrder="stroke" opacity={0.92} textAnchor="middle" fontWeight={900}>
+                <text x={cx} y={M.top + 22} fontSize={22}>
+                  {money(p.cost)}
+                </text>
+                <text x={cx} y={M.top + 39} fontSize={12}>
+                  {Math.round(p.kwh).toLocaleString('en-AU')} kWh
+                </text>
+              </g>
+            );
+          })
+        )}
+        {maxExp > 0 &&
+          exportH > 30 &&
+          (() => {
+            const items = wholesale
+              ? [{ key: 'W', cx: clampX(M.left + PLOT_W * 0.72), dollars: activeResult?.breakdown.solarCredit ?? 0, kwh: totalExportKwh }]
+              : [...expPeriods.values()].map((p) => {
+                  const c = expCenter(p.key);
+                  return c == null ? null : { key: p.key, cx: clampX(M.left + c * SLOT), dollars: -p.credit, kwh: p.kwh };
+                });
+            return items.map((it) =>
+              !it ? null : (
+                <g
+                  key={`ewm${it.key}`}
+                  pointerEvents="none"
+                  fill={EXPORT_FILL}
+                  stroke="#fff"
+                  strokeWidth={3.5}
+                  strokeLinejoin="round"
+                  paintOrder="stroke"
+                  opacity={0.92}
+                  textAnchor="middle"
+                  fontWeight={900}
+                >
+                  <text x={it.cx} y={M.top + PLOT_H - 22} fontSize={20}>
+                    {money(it.dollars)}
+                  </text>
+                  <text x={it.cx} y={M.top + PLOT_H - 7} fontSize={12}>
+                    {Math.round(it.kwh).toLocaleString('en-AU')} kWh
+                  </text>
+                </g>
+              ),
+            );
+          })()}
         {/* Wholesale: the hourly price curve behind the bars + one header. Else: per-period labels. */}
         {wholesale ? (
           <>
