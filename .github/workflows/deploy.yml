@@ -25,7 +25,9 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      # `npm install` (not `npm ci`) so cross-platform optional native deps (@emnapi/*, rollup/oxc
+      # native bindings) resolve on the linux runner without a fully platform-complete lockfile.
+      - run: npm install --no-audit --no-fund
       - name: Build
         # base must match the project-pages path: rewiring-aus.github.io/<repo>/
         run: VITE_BASE=/energy-plan-comparison/ npm run build
