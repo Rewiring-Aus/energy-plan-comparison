@@ -221,6 +221,7 @@ interface RawControlledLoad {
 }
 interface RawSolarFiT {
   scheme?: string;
+  payerType?: string; // RETAILER | GOVERNMENT — government schemes are legacy premium FiTs
   description?: string;
   tariffUType: 'singleTariff' | 'timeVaryingTariffs';
   singleTariff?: { rates: RawRate[] };
@@ -652,7 +653,9 @@ export function normalizePlan(raw: RawPlanDetail): Plan | null {
   // Solar feed-in: collect ALL bands from the current scheme. A retailer's TOU FiT is
   // expressed as several entries (e.g. a peak band + a 0c "all other times" band), so we
   // must keep them all — a single rate applied flat would massively over-credit export.
-  const fitEntries = c.solarFeedInTariff ?? [];
+  // Drop GOVERNMENT-payer bands: these are legacy premium schemes (e.g. SA's 44c scheme, closed to
+  // new customers years ago), not the feed-in a new customer actually receives from the retailer.
+  const fitEntries = (c.solarFeedInTariff ?? []).filter((f) => (f.payerType || '').toUpperCase() !== 'GOVERNMENT');
   if (fitEntries.length) {
     const hasCurrent = fitEntries.some((f) => (f.scheme || '').toUpperCase() === 'CURRENT');
     const targetScheme = hasCurrent ? 'CURRENT' : (fitEntries[0].scheme || '').toUpperCase();
