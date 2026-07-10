@@ -30,6 +30,7 @@ export function CurrentPlanPicker({ plans }: { plans: Plan[] }) {
 
   return (
     <div className="current-picker">
+      <p className="current-picker-note">Select your current plan (optional) to compare possible savings</p>
       <div className="current-picker-row">
         <span className="current-picker-label">Your current plan:</span>
         <select

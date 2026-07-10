@@ -165,6 +165,13 @@ function formatWindows(windows: TimeWindow[]): string {
 function fitDetail(bands: FeedInBand[]): string {
   const paid = bands.filter((b) => b.perKwh > 0);
   if (!paid.length) return '0c/kWh';
+  // Variable wholesale (24 hourly bands): show min–max range instead of listing all hours
+  if (bands.length >= 24) {
+    const rates = bands.map((b) => b.perKwh * 100).sort((a, b) => a - b);
+    const min = rates[0];
+    const max = rates[rates.length - 1];
+    return min === max ? `${min.toFixed(0)}c/kWh` : `${min.toFixed(0)}–${max.toFixed(0)}c with hourly variation`;
+  }
   const txt = paid
     .map((b) => `${(b.perKwh * 100).toFixed(1)}c ${b.windows ? formatWindows(b.windows) : 'all day'}`.trim())
     .join('; ');

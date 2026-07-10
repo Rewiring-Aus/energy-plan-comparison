@@ -2,11 +2,10 @@ import './styles/global.css';
 import { useMemo } from 'react';
 import { useUsageStore, baselineDaily } from './store/usageStore';
 import { rankPlans, rankPlansOptimised, costPlanOptimised, computeCost } from './lib/costEngine';
-import { synthesizeProfile, type SynthInput } from './lib/usageModel';
+import type { SynthInput } from './lib/usageModel';
 import { PLAN_BY_ID, dnspForPostcode, plansForDnsp, passesFilters } from './lib/plans';
 import { stateForPostcode } from './data/energyModel';
 import { HomeModelSentence } from './components/UsageBuilder/HomeModelSentence';
-import { BehavioursPanel } from './components/UsageBuilder/BehavioursPanel';
 import { HourlyProfileEditor } from './components/UsageBuilder/HourlyProfileEditor';
 import { PlanList } from './components/PlanList/PlanList';
 import { CurrentPlanPicker } from './components/PlanList/CurrentPlanPicker';
@@ -76,29 +75,6 @@ export default function App() {
   }, [ranked, selectedPlanId, activeProfile, period]);
   const activePlan = activeResult ? PLAN_BY_ID.get(activeResult.planId) : undefined;
 
-  // Saving from the current demand-shifting behaviours vs leaving everything as-is.
-  const behaviourSaving = useMemo(() => {
-    if (!activePlan || !activeResult) return null;
-    const asIs = synthesizeProfile({
-      home,
-      baselineDailyKwh: baselineDaily(baselineAmount, baselineUnit, period),
-      includeSolar: home.solarKw > 0,
-      effectiveness,
-      state: stateForPostcode(postcode),
-      behaviours: {
-        ...behaviours,
-        poolTimer: false,
-        hotWaterTimer: false,
-        heatPumpTimer: false,
-        evScheduled: false,
-        v2g: false,
-        batteryGridCharge: false,
-      },
-    }).profile;
-    // Compare against the *derived* profile (not any hand-edited scenario) so this stays a clean
-    // "what your behaviours save on the modelled usage" figure.
-    return computeCost(activePlan, asIs, { period }).total - computeCost(activePlan, profile, { period }).total;
-  }, [activePlan, home, baselineAmount, baselineUnit, period, effectiveness, behaviours, profile, postcode]);
 
   return (
     <div className="app">
@@ -107,12 +83,11 @@ export default function App() {
           <header className="app-header">
             <h1>Find your best energy plan</h1>
             <p>
-              Tell us about your home, and we'll rank every plan on your network. Built on the AER's
-              public Energy Made Easy plan data.
+              Wondering about changing plans or trying to use the new 3 hours of free power? This tool will help
+              you see if you can move your energy usage around during the day to save more on your bills.
             </p>
           </header>
           <HomeModelSentence />
-          {showPlans && <BehavioursPanel saving={behaviourSaving} />}
           {showPlans && <HourlyProfileEditor activePlan={activePlan} activeResult={activeResult} />}
         </div>
 
