@@ -188,16 +188,16 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
         />
       )}
 
-      {/* Per-period cost contribution. In the billed view the time-of-use energy periods are
-          labelled directly on the chart, so only the non-time costs (fixed, controlled load,
-          demand, export credit) are chipped below; the loads view shows the full set. */}
+      {/* Per-period cost contribution. In the billed view the time-of-use energy periods and the
+          solar feed-in credit are shown directly on the chart, so only the other non-time costs
+          (fixed, controlled load, demand) are chipped below; the loads view shows the full set. */}
       {activeResult && (
         <div className="period-chips">
           <span className="chip fixed">
             Fixed <b>{money(activeResult.fixedTotal)}</b>
           </span>
           {bands
-            .filter((b) => mode === 'loads' || !isTimeBand(b.key))
+            .filter((b) => mode === 'loads' || (!isTimeBand(b.key) && b.key !== 'SOLAR'))
             .map((b) => (
               <span
                 key={b.key}
@@ -719,13 +719,6 @@ function BilledChart({
         )}
         <XLabels />
       </svg>
-      {maxExp > 0 && (
-        <div className="chart-legend">
-          <span className="lg">
-            <i className="sw" style={{ background: EXPORT_FILL }} /> Export (below the line) earns the feed-in credit
-          </span>
-        </div>
-      )}
     </>
   );
 }
