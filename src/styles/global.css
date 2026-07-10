@@ -956,6 +956,11 @@ body {
 }
 .plan-card {
   cursor: pointer;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+/* glowing purple halo to signal the whole card is clickable */
+.plan-card:hover {
+  box-shadow: 0 0 0 2px rgba(74, 0, 195, 0.4), 0 8px 26px rgba(74, 0, 195, 0.35);
 }
 .plan-card.active {
   outline: 2.5px solid var(--purple);
@@ -1093,6 +1098,7 @@ body {
 }
 .subtotal:hover {
   border-color: var(--purple);
+  box-shadow: 0 0 0 2px rgba(74, 0, 195, 0.25), 0 2px 12px rgba(74, 0, 195, 0.3);
 }
 .subtotal.open {
   background: #f3eefc;

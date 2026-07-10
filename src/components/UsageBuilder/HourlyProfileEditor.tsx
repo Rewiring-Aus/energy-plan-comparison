@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { useUsageStore } from '../../store/usageStore';
-import { APPLIANCE_META } from '../../data/applianceProfiles';
+import { APPLIANCE_META, soakWindowLabel } from '../../data/applianceProfiles';
+import { stateForPostcode } from '../../data/energyModel';
 import { resolveTouRate, resolveFitRate } from '../../lib/time';
 import { billingDays } from '../../lib/costEngine';
 import type { BillingPeriod, CostResult, DayType, Plan, SolarEffectiveness, TouLabel, UsageProfile, Behaviours } from '../../types';
@@ -15,19 +16,22 @@ const SLOT = PLOT_W / 24;
 const BAR_W = SLOT * 0.78;
 const BAR_PAD = (SLOT - BAR_W) / 2;
 
-const TOU_FILL: Record<TouLabel, string> = { PEAK: '#c0392b', SHOULDER: '#e08a1e', OFFPEAK: '#2b8a5b' };
+const TOU_FILL: Record<TouLabel, string> = { PEAK: '#c0392b', SHOULDER: '#e08a1e', OFFPEAK: '#4f9e6a' };
 const FLAT_FILL = '#4a00c3';
-const FREE_FILL = '#2b8a5b';
+const FREE_FILL = '#12c46e'; // vivid green — free periods should pop vs the muted off-peak green
 const EXPORT_FILL = '#3b7dd8';
 const WHOLESALE_FILL = '#6b46c1';
 const PRICE_LINE = '#e0a020';
+// Off-peak scales green (cheapest) → yellow-green (dearest) by price, like the shoulder ramp.
+const OFFPEAK_LOW = '#4f9e6a';
+const OFFPEAK_HIGH = '#8faa39';
 
 const BAND_COLOR: Record<string, string> = {
   PEAK: '#c0392b',
   SHOULDER: '#e08a1e',
-  OFFPEAK: '#2b8a5b',
+  OFFPEAK: '#4f9e6a',
   ANYTIME: '#4a00c3',
-  FREE: '#2b8a5b',
+  FREE: '#12c46e',
   CONTROLLED_LOAD: '#1f9e8f',
   DEMAND: '#777',
   SOLAR: '#0d6e2d',
@@ -123,8 +127,9 @@ interface Props {
 }
 
 export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
-  const { profile, manualProfile, loads, effectiveness, home, period, setEffectiveness, setManualImport, resetManual, behaviours, setBehaviour } =
+  const { profile, manualProfile, loads, effectiveness, home, period, postcode, setEffectiveness, setManualImport, resetManual, behaviours, setBehaviour } =
     useUsageStore();
+  const soakLabel = soakWindowLabel(stateForPostcode(postcode));
   const [mode, setMode] = useState<Mode>('billed');
 
   const eff = manualProfile ?? profile;
@@ -197,7 +202,7 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
             Fixed <b>{money(activeResult.fixedTotal)}</b>
           </span>
           {bands
-            .filter((b) => mode === 'loads' || (!isTimeBand(b.key) && b.key !== 'SOLAR'))
+            .filter((b) => mode === 'loads' || (!isTimeBand(b.key) && b.key !== 'SOLAR' && b.key !== 'WHOLESALE'))
             .map((b) => (
               <span
                 key={b.key}
@@ -230,7 +235,7 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
             Flexible loads
           </p>
           <p className="behaviour-intro">
-            Moving flexible loads into the cheap/free solar-soak window (11am–2pm) can cut your bill. Try switching these on and watch the plans re-rank.
+            Moving flexible loads into the cheap/free solar-soak window ({soakLabel}) can cut your bill. Try switching these on and watch the plans re-rank.
           </p>
 
           {home.poolPump && (
@@ -452,18 +457,26 @@ function BilledChart({
   // never reads as a peak band.
   const shoulderColor = (rate: number) =>
     shoulderRates.length < 2 || shMax === shMin ? TOU_FILL.SHOULDER : lerpColor('#eccb3f', '#e07a1e', (rate - shMin) / (shMax - shMin));
+  // Off-peak: scale by price too (muted green → yellow-green), so it reads as cheap-but-not-free and
+  // is visibly distinct from the vivid-green FREE periods.
+  const offpeakRates = (flat ? [] : activePlan?.touRates ?? [])
+    .filter((r) => r.label === 'OFFPEAK' && (r.blocks[0]?.perKwh ?? 0) > 0)
+    .map((r) => r.blocks[0]?.perKwh ?? 0);
+  const opMin = Math.min(...offpeakRates);
+  const opMax = Math.max(...offpeakRates);
+  const offpeakColor = (rate: number) =>
+    offpeakRates.length < 2 || opMax === opMin ? OFFPEAK_LOW : lerpColor(OFFPEAK_LOW, OFFPEAK_HIGH, (rate - opMin) / (opMax - opMin));
   const hourPeriod = (h: number, day: DayType): { key: string; name: string; color: string; rateC: number } => {
     if (isFreeHour(activePlan, h, day)) return { key: 'FREE', name: 'Free', color: FREE_FILL, rateC: 0 };
     if (!flat && activePlan?.touRates?.length) {
       const r = resolveTouRate(activePlan.touRates, h, day);
       if (r) {
         const perKwh = r.blocks[0]?.perKwh ?? 0;
-        return {
-          key: `${r.label}#${activePlan.touRates.indexOf(r)}`,
-          name: TOU_NAME[r.label],
-          color: r.label === 'SHOULDER' ? shoulderColor(perKwh) : TOU_FILL[r.label],
-          rateC: Math.round(perKwh * 100),
-        };
+        // A 0c TOU band (of any label) is effectively a free window — show it as such.
+        if (perKwh <= 0) return { key: 'FREE', name: 'Free', color: FREE_FILL, rateC: 0 };
+        const color =
+          r.label === 'SHOULDER' ? shoulderColor(perKwh) : r.label === 'OFFPEAK' ? offpeakColor(perKwh) : TOU_FILL[r.label];
+        return { key: `${r.label}#${activePlan.touRates.indexOf(r)}`, name: TOU_NAME[r.label], color, rateC: Math.round(perKwh * 100) };
       }
     }
     return { key: 'ANYTIME', name: 'Usage', color: FLAT_FILL, rateC: Math.round(flatRate * 100) };
@@ -503,7 +516,9 @@ function BilledChart({
   const wholesale = !!activePlan?.variableWholesale;
   const priceRates = activePlan?.touRates?.map((r) => r.blocks[0]?.perKwh ?? 0) ?? [];
   const maxRate = Math.max(0.01, ...priceRates);
-  const priceY = (h: number) => M.top + importH * (0.08 + 0.85 * (1 - (priceRates[h] ?? 0) / maxRate));
+  const minRate = Math.min(...(priceRates.length ? priceRates : [0]));
+  const priceYr = (rate: number) => M.top + importH * (0.08 + 0.85 * (1 - rate / maxRate));
+  const priceY = (h: number) => priceYr(priceRates[h] ?? 0);
   const priceLine = priceRates.map((_, h) => `${M.left + h * SLOT + SLOT / 2},${priceY(h)}`).join(' ');
   const wholesaleKwh = [...periods.values()].reduce((s, p) => s + p.kwh, 0);
   const wholesaleCost = bandCost('WHOLESALE');
@@ -515,8 +530,10 @@ function BilledChart({
   const exportRates = Array.from({ length: 24 }, (_, h) => fitAt(h));
   const hasExportRates = exportRates.some((r) => r > 0);
   const maxExportRate = Math.max(0.01, ...exportRates);
-  // Wholesale plans draw an hourly feed-in curve; the height maps rate → position in the export band.
-  const exportY = (h: number) => zeroY + (1 - (exportRates[h] ?? 0) / maxExportRate) * (exportH * 0.7) + exportH * 0.12;
+  // Wholesale plans draw an hourly feed-in curve BELOW the line: a higher feed-in reads as a bigger
+  // credit, so it sits FURTHER from the x-axis (further down), like a more-negative amount.
+  const exportYr = (rate: number) => zeroY + (0.14 + 0.78 * (rate / maxExportRate)) * exportH;
+  const exportY = (h: number) => exportYr(exportRates[h] ?? 0);
   const exportLine = hasExportRates ? exportRates.map((_, h) => `${M.left + h * SLOT + SLOT / 2},${exportY(h)}`).join(' ') : '';
 
   // Below-line feed-in sections (non-wholesale): group hours by feed-in rate, each with its own blue
@@ -703,8 +720,19 @@ function BilledChart({
             <polyline points={priceLine} fill="none" stroke={PRICE_LINE} strokeWidth={2} strokeDasharray="4 3" pointerEvents="none" />
             {hasExportRates && <polyline points={exportLine} fill="none" stroke={EXPORT_FILL} strokeWidth={2} strokeDasharray="4 3" pointerEvents="none" opacity={0.6} />}
             <text x={M.left + PLOT_W / 2} y={16} textAnchor="middle" fontSize={13} fontWeight={700} fill={WHOLESALE_FILL} pointerEvents="none">
-              Wholesale price · {Math.round(Math.min(...priceRates) * 100)}–{Math.round(maxRate * 100)}c/kWh through the day
+              Wholesale price · {Math.round(minRate * 100)}–{Math.round(maxRate * 100)}c/kWh through the day
             </text>
+            {/* Right axis: c/kWh amounts for the import price curve (gold) and feed-in curve (blue). */}
+            {[maxRate, minRate].map((r, i) => (
+              <text key={`py${i}`} className="axis-label" x={VW - 2} y={priceYr(r) + 3} textAnchor="end" fill={PRICE_LINE} pointerEvents="none">
+                {Math.round(r * 100)}c
+              </text>
+            ))}
+            {hasExportRates && (
+              <text className="axis-label" x={VW - 2} y={exportYr(maxExportRate) + 3} textAnchor="end" fill={EXPORT_FILL} pointerEvents="none">
+                {Math.round(maxExportRate * 100)}c
+              </text>
+            )}
           </>
         ) : (
           [...periods.values()].map((p) => {
