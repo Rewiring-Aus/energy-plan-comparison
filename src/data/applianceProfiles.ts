@@ -46,6 +46,21 @@ export const SOAK_SHAPE = norm([
 ]);
 export const SOAK_HOURS = [11, 12, 13];
 
+/** South Australia's solar glut runs later — the soak/solar-sharer window is 12–3pm there. */
+export const SA_SOAK_SHAPE = norm([
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+]);
+export const SA_SOAK_HOURS = [12, 13, 14];
+
+/** The solar-soak window shape for a state (SA shifts later; everyone else uses the default). */
+export function soakShapeForState(state?: string): number[] {
+  return state === 'SA' ? SA_SOAK_SHAPE : SOAK_SHAPE;
+}
+/** Human label for the soak window, e.g. "11am–2pm" (default) or "12–3pm" (SA). */
+export function soakWindowLabel(state?: string): string {
+  return state === 'SA' ? '12–3pm' : '11am–2pm';
+}
+
 export type ApplianceKey = 'base' | 'hotWater' | 'cooking' | 'aircon' | 'heating' | 'pool' | 'ev';
 
 /** Display metadata for the stacked-load chart + legend, drawn bottom→top in this order. */

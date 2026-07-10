@@ -161,8 +161,14 @@ export const useUsageStore = create<UsageState>((set) => {
     setCurrentPlan: (currentPlanId) => set((s) => ({ currentPlanId, ...rederive(s, { selectedPlanId: currentPlanId }) })),
     setFilter: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
     // Changing network invalidates pinned/current plans (they may not exist in the new DNSP).
+    // Crossing into/out of SA also flips the solar-soak window (12–3pm vs 11am–2pm), so reset the
+    // flexible-load shifts — they were tuned to the old window.
     setPostcode: (postcode) =>
-      set((s) => ({ currentPlanId: null, manualProfile: null, ...rederive(s, { selectedPlanId: null, postcode }) })),
+      set((s) => {
+        const saFlip = (stateForPostcode(s.postcode) === 'SA') !== (stateForPostcode(postcode) === 'SA');
+        const patch = { selectedPlanId: null, postcode, ...(saFlip ? { behaviours: DEFAULT_BEHAVIOURS } : {}) };
+        return { currentPlanId: null, manualProfile: null, ...rederive(s, patch) };
+      }),
     setShowPlans: (showPlans) => set({ showPlans }),
 
     setManualImport: (hour, value, keepTotal) =>

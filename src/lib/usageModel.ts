@@ -7,7 +7,7 @@ import {
   HEATING_SHAPE,
   HOTWATER_SHAPE,
   POOL_SHAPE,
-  SOAK_SHAPE,
+  soakShapeForState,
   applianceDailyKwh,
   type ApplianceKey,
   type HomeInputs,
@@ -76,9 +76,9 @@ export interface DerivedProfile {
 const zeros = () => Array.from({ length: 24 }, () => 0);
 
 /** Blend a natural load shape with the solar-soak window by `share` (0..1). */
-function soaked(natural: number[], share: number): number[] {
+function soaked(natural: number[], share: number, soakShape: number[]): number[] {
   const s = Math.max(0, Math.min(1, share));
-  return natural.map((v, h) => v * (1 - s) + SOAK_SHAPE[h] * s);
+  return natural.map((v, h) => v * (1 - s) + soakShape[h] * s);
 }
 
 /**
@@ -95,6 +95,7 @@ export function synthesizeProfile({
   dispatchRates,
 }: SynthInput): DerivedProfile {
   const a = applianceDailyKwh(home, state);
+  const soakShape = soakShapeForState(state);
   const onCL = home.hotWater === 'controlled-load';
   const isHeatPump = home.hotWater === 'heat-pump';
 
@@ -106,13 +107,13 @@ export function synthesizeProfile({
   const hotWaterInGross = onCL ? (clShiftedToSoak ? a.hotWater : 0) : a.hotWater;
   const hwTimerOn = isHeatPump ? b.heatPumpTimer : b.hotWaterTimer;
   const hwShare = isHeatPump ? b.heatPumpShare : b.hotWaterShare;
-  const hotWaterShape = hwTimerOn ? soaked(HOTWATER_SHAPE, hwShare) : HOTWATER_SHAPE;
+  const hotWaterShape = hwTimerOn ? soaked(HOTWATER_SHAPE, hwShare, soakShape) : HOTWATER_SHAPE;
 
   // EV: scheduling only soaks well if the car is home midday; otherwise limited.
   const evEffShare = b.evScheduled ? (b.evHomeDaytime ? b.evShare : 0.2) : 0;
-  const evShape = b.evScheduled ? soaked(EV_SHAPES[home.evCharge], evEffShare) : EV_SHAPES[home.evCharge];
+  const evShape = b.evScheduled ? soaked(EV_SHAPES[home.evCharge], evEffShare, soakShape) : EV_SHAPES[home.evCharge];
 
-  const poolShape = b.poolTimer ? soaked(POOL_SHAPE, b.poolShare) : POOL_SHAPE;
+  const poolShape = b.poolTimer ? soaked(POOL_SHAPE, b.poolShare, soakShape) : POOL_SHAPE;
 
   const contributions: { key: ApplianceKey; shape: number[]; kwh: number }[] = [
     { key: 'base', shape: BASE_SHAPE, kwh: a.base },
