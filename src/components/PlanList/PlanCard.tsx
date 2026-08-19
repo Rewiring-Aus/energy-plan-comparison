@@ -28,11 +28,10 @@ interface Props {
   best: boolean;
   active?: boolean; // currently driving the graph
   pinned?: boolean; // explicitly selected by the user
-  current?: boolean; // the user's current plan (savings baseline)
   onSelect?: (id: string | null) => void;
 }
 
-export function PlanCard({ plan, result, rank, best, active, pinned, current, onSelect }: Props) {
+export function PlanCard({ plan, result, rank, best, active, pinned, onSelect }: Props) {
   const [fixedOpen, setFixedOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const postcode = useUsageStore((s) => s.postcode);
@@ -41,12 +40,11 @@ export function PlanCard({ plan, result, rank, best, active, pinned, current, on
 
   return (
     <div
-      className={`plan-card${best ? ' best' : ''}${active ? ' active' : ''}${current ? ' current' : ''}`}
+      className={`plan-card${best ? ' best' : ''}${active ? ' active' : ''}`}
       data-plan-id={plan.id}
       onClick={() => onSelect?.(pinned ? null : plan.id)}
     >
       {active && <span className="active-flag">← Active</span>}
-      {current && <span className="current-flag">Your plan</span>}
       {best && (
         <RoughBox fill="var(--yellow)" stroke="none" roughness={2.5} seed={99} className="best-flag">
           Cheapest

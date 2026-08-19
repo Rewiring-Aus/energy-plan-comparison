@@ -2,7 +2,6 @@ import { useUsageStore, baselineDaily } from '../../store/usageStore';
 import { BlankInput } from '../ui/BlankInput';
 import { BlankSelect } from '../ui/BlankSelect';
 import { RoughBox } from '../ui/RoughBox';
-import { CurrentPlanPicker } from '../PlanList/CurrentPlanPicker';
 import { dailyToPeriodKwh } from '../../lib/usageModel';
 import { estimatedDailyKwh } from '../../data/applianceProfiles';
 import { stateForPostcode } from '../../data/energyModel';
@@ -206,8 +205,6 @@ export function HomeModelSentence({ open = true, collapsible = false, onToggle }
             : 'Using your number. Clear it to fall back to the estimate from your home.'}
         </p>
       </div>
-
-      <CurrentPlanPicker />
     </div>
   );
 }

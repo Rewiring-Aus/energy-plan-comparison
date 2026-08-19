@@ -1,7 +1,7 @@
 import './styles/global.css';
 import { useMemo, useState } from 'react';
 import { useUsageStore, baselineDaily } from './store/usageStore';
-import { rankPlans, rankPlansOptimised, costPlanOptimised, computeCost } from './lib/costEngine';
+import { rankPlans, rankPlansOptimised, computeCost } from './lib/costEngine';
 import type { SynthInput } from './lib/usageModel';
 import { PLAN_BY_ID, dnspForPostcode, plansForDnsp, passesFilters } from './lib/plans';
 import { stateForPostcode } from './data/energyModel';
@@ -22,7 +22,6 @@ export default function App() {
   const baselineAmount = useUsageStore((s) => s.baselineAmount);
   const baselineUnit = useUsageStore((s) => s.baselineUnit);
   const filters = useUsageStore((s) => s.filters);
-  const currentPlanId = useUsageStore((s) => s.currentPlanId);
   const manualProfile = useUsageStore((s) => s.manualProfile);
 
   // The Your Home panel collapses once plans are shown (so the usage graph below it comes into
@@ -59,18 +58,12 @@ export default function App() {
     [arbitraging, filteredPlans, synthBase, activeProfile, period],
   );
 
-  // Current plan cost (computed even if it's filtered out — it's still the user's plan).
-  const currentResult = useMemo(() => {
-    const p = currentPlanId ? PLAN_BY_ID.get(currentPlanId) : undefined;
-    if (!p) return null;
-    return arbitraging ? costPlanOptimised(p, synthBase, { period }) : computeCost(p, activeProfile, { period });
-  }, [currentPlanId, arbitraging, synthBase, activeProfile, period]);
   const activeResult = useMemo(() => {
     if (selectedPlanId) {
       const inRanked = ranked.find((r) => r.planId === selectedPlanId);
       if (inRanked) return inRanked;
-      // Selected plan may be filtered out of the ranked list (e.g. the current plan) —
-      // still make it the active plan by costing it directly.
+      // Selected plan may be filtered out of the ranked list — still cost it directly so it can
+      // drive the graph.
       const p = PLAN_BY_ID.get(selectedPlanId);
       if (p) return computeCost(p, activeProfile, { period });
     }
@@ -99,7 +92,6 @@ export default function App() {
             <PlanList
               ranked={ranked}
               activePlanId={activeResult?.planId}
-              currentResult={currentResult}
               dnsp={dnsp}
               postcode={postcode}
               total={plans.length}

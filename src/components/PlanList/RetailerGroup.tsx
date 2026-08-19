@@ -11,21 +11,10 @@ interface Props {
   best: boolean; // is this the cheapest retailer overall?
   activePlanId?: string;
   selectedPlanId: string | null;
-  currentPlanId: string | null;
   onSelect: (id: string | null) => void;
 }
 
-export function RetailerGroup({
-  retailer,
-  results,
-  planById,
-  rankOf,
-  best,
-  activePlanId,
-  selectedPlanId,
-  currentPlanId,
-  onSelect,
-}: Props) {
+export function RetailerGroup({ retailer, results, planById, rankOf, best, activePlanId, selectedPlanId, onSelect }: Props) {
   const [open, setOpen] = useState(false);
   const header = results[0];
   const others = results.slice(1);
@@ -35,7 +24,6 @@ export function RetailerGroup({
   const cardProps = (planId: string) => ({
     active: activePlanId === planId,
     pinned: selectedPlanId === planId,
-    current: currentPlanId === planId,
     onSelect,
   });
 

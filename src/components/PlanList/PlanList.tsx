@@ -3,30 +3,22 @@ import { useUsageStore } from '../../store/usageStore';
 import type { CostResult } from '../../types';
 import { PLAN_BY_ID } from '../../lib/plans';
 import { RetailerGroup } from './RetailerGroup';
-import { PlanCard } from './PlanCard';
 import { PlanFilters } from './PlanFilters';
 import { useFlip } from './useFlip';
 
 const SHOW = 40; // retailers to show
 
-function money(v: number): string {
-  const r = Math.round(v);
-  return r < 0 ? `−$${Math.abs(r).toLocaleString('en-AU')}` : `$${r.toLocaleString('en-AU')}`;
-}
-
 interface Props {
   ranked: CostResult[];
   activePlanId?: string;
-  currentResult?: CostResult | null;
   dnsp: string | null;
   postcode: string;
   total: number;
 }
 
-export function PlanList({ ranked, activePlanId, currentResult, dnsp, postcode, total }: Props) {
+export function PlanList({ ranked, activePlanId, dnsp, postcode, total }: Props) {
   const selectedPlanId = useUsageStore((s) => s.selectedPlanId);
   const setSelectedPlan = useUsageStore((s) => s.setSelectedPlan);
-  const currentPlanId = useUsageStore((s) => s.currentPlanId);
 
   const { groups, rankOf } = useMemo(() => {
     const map = new Map<string, CostResult[]>();
@@ -62,37 +54,10 @@ export function PlanList({ ranked, activePlanId, currentResult, dnsp, postcode, 
     };
   }, [ranked]);
 
-  const cheapest = ranked[0]?.total ?? 0;
   const listRef = useFlip<HTMLDivElement>();
-  const currentPlan = currentResult ? PLAN_BY_ID.get(currentResult.planId) : undefined;
-  const saving = currentResult ? currentResult.total - cheapest : 0;
 
   return (
     <div>
-      {currentPlan && currentResult && (
-        <div className="savings-banner">
-          {saving > 1 ? (
-            <>
-              You could save <strong>{money(saving)}</strong> vs your current plan
-            </>
-          ) : (
-            <>You're already on one of the cheapest plans for your usage. 👏</>
-          )}
-          <div className="savings-current">
-            <PlanCard
-              plan={currentPlan}
-              result={currentResult}
-              rank={rankOf(currentPlan.id) || 0}
-              best={false}
-              current
-              active={activePlanId === currentPlan.id}
-              pinned={selectedPlanId === currentPlan.id}
-              onSelect={setSelectedPlan}
-            />
-          </div>
-        </div>
-      )}
-
       {!dnsp && (
         <p className="plan-count">
           Postcode <strong>{postcode}</strong> isn't matched to a distribution network in our data.
@@ -112,7 +77,6 @@ export function PlanList({ ranked, activePlanId, currentResult, dnsp, postcode, 
             best={i === 0}
             activePlanId={activePlanId}
             selectedPlanId={selectedPlanId}
-            currentPlanId={currentPlanId}
             onSelect={setSelectedPlan}
           />
         ))}

@@ -69,8 +69,6 @@ interface UsageState extends DeriveInputs {
   solar: number[];
   /** Plan the user pinned as active (null ⇒ follow the cheapest). */
   selectedPlanId: string | null;
-  /** The user's current plan, for the savings baseline. */
-  currentPlanId: string | null;
   /** Plan-list filters. */
   filters: PlanFilters;
   /** Postcode used to pick the distribution network (DNSP). */
@@ -84,7 +82,6 @@ interface UsageState extends DeriveInputs {
   setEffectiveness: (e: SolarEffectiveness) => void;
   setBehaviour: (patch: Partial<Behaviours>) => void;
   setSelectedPlan: (id: string | null) => void;
-  setCurrentPlan: (id: string | null) => void;
   setFilter: (patch: Partial<PlanFilters>) => void;
   setPostcode: (pc: string) => void;
   setShowPlans: (v: boolean) => void;
@@ -142,7 +139,6 @@ export const useUsageStore = create<UsageState>((set) => {
     gross: initial.gross,
     solar: initial.solar,
     selectedPlanId: null,
-    currentPlanId: null,
     filters: DEFAULT_FILTERS,
     postcode: '2000',
     showPlans: false,
@@ -157,17 +153,15 @@ export const useUsageStore = create<UsageState>((set) => {
 
     // Re-derive on select: with V2G/battery arbitrage on, the profile optimises to this plan.
     setSelectedPlan: (selectedPlanId) => set((s) => rederive(s, { selectedPlanId })),
-    // Picking a current plan also makes it the active plan driving the graph.
-    setCurrentPlan: (currentPlanId) => set((s) => ({ currentPlanId, ...rederive(s, { selectedPlanId: currentPlanId }) })),
     setFilter: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
-    // Changing network invalidates pinned/current plans (they may not exist in the new DNSP).
+    // Changing network invalidates the pinned plan (it may not exist in the new DNSP).
     // Crossing into/out of SA also flips the solar-soak window (12–3pm vs 11am–2pm), so reset the
     // flexible-load shifts — they were tuned to the old window.
     setPostcode: (postcode) =>
       set((s) => {
         const saFlip = (stateForPostcode(s.postcode) === 'SA') !== (stateForPostcode(postcode) === 'SA');
         const patch = { selectedPlanId: null, postcode, ...(saFlip ? { behaviours: DEFAULT_BEHAVIOURS } : {}) };
-        return { currentPlanId: null, manualProfile: null, ...rederive(s, patch) };
+        return { manualProfile: null, ...rederive(s, patch) };
       }),
     setShowPlans: (showPlans) => set({ showPlans }),
 
