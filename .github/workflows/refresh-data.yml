@@ -1,0 +1,75 @@
+name: Refresh plan + wholesale data
+
+on:
+  schedule:
+    - cron: '0 19 * * 0' # weekly — Sunday 19:00 UTC ≈ Monday 05:00 AEST
+  workflow_dispatch: # allow a manual run any time
+
+permissions:
+  contents: write # commit the refreshed snapshots back to main
+  pages: write
+  id-token: write
+
+# Share the Pages concurrency group so a refresh deploy and a code-push deploy don't clash.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm install --no-audit --no-fund
+
+      # Wholesale curve first — normalizePlan reads it to build the variable-wholesale (Amber-style)
+      # 24×1h tariffs, so it must be current before the plan fetch runs.
+      - name: Refresh wholesale price curve
+        run: npm run fetch-wholesale
+      - name: Refresh retail plans
+        run: npm run fetch-plans
+
+      - name: Sanity-check the snapshots
+        run: |
+          N=$(node -e "console.log(require('./src/data/plans.json').plans.length)")
+          echo "Fetched $N plans"
+          [ "$N" -ge 5000 ] || { echo "::error::plan snapshot too small ($N) — aborting"; exit 1; }
+          node -e "
+            const { curves } = require('./src/data/wholesale-price.json');
+            const bad = Object.entries(curves).filter(([, c]) => c.length !== 24 || c.reduce((a, b) => a + b, 0) <= 0);
+            if (bad.length) { console.error('::error::bad wholesale curve(s): ' + bad.map(([r]) => r).join(', ')); process.exit(1); }
+            console.log('wholesale curves OK: ' + Object.keys(curves).join(', '));
+          "
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/data/plans.json src/data/postcode-dnsp.json src/data/wholesale-price.json
+          if git diff --cached --quiet; then
+            echo "No data changes this week."
+          else
+            git commit -m "chore: weekly plan + wholesale data refresh ($(date -u +%F))"
+            git push
+          fi
+
+      - name: Build
+        run: VITE_BASE=/energy-plan-comparison/ npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: refresh
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

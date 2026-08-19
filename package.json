@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "fetch-plans": "tsx scripts/fetch-plans.ts"
+    "fetch-plans": "tsx scripts/fetch-plans.ts",
+    "fetch-wholesale": "tsx scripts/fetch-wholesale.ts"
   },
   "dependencies": {
     "react": "^19.2.7",
