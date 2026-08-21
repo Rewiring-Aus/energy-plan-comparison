@@ -2,7 +2,13 @@ import { useState } from 'react';
 import type { CostResult, Plan } from '../../types';
 import { RoughBox } from '../ui/RoughBox';
 import { useUsageStore } from '../../store/usageStore';
-import { emePlanUrl } from '../../lib/plans';
+
+/** Energy Made Easy plan-page URL. The CDR plan id carries a "@EME"/"@VEC" aggregator-source suffix
+ *  that EME's own URL doesn't want; strip it and pass the postcode so the right network is shown. */
+function emePlanUrl(planId: string, postcode: string): string {
+  const bareId = planId.split('@')[0];
+  return `https://www.energymadeeasy.gov.au/plan?id=${encodeURIComponent(bareId)}&postcode=${encodeURIComponent(postcode)}`;
+}
 
 const MODEL_LABEL: Record<Plan['pricingModel'], string> = {
   SINGLE_RATE: 'Single rate',
