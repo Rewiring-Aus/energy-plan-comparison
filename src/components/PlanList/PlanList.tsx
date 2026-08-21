@@ -87,9 +87,9 @@ export function PlanList({ ranked, activePlanId, dnsp, postcode, total }: Props)
         </p>
       )}
       <p className="plan-count" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.5 }}>
-        Estimates only, based on published reference rates. Plans marked “estimate” or “variable
-        wholesale” (e.g. Amber, GloBird WHOLESAVE) track market prices and may not reflect real
-        bills. Demand charges are modelled best-effort. Always confirm on{' '}
+        Estimates only, based on published reference rates. Plans marked “variable / spot” (e.g.
+        Amber) track market prices and may not reflect real bills. Demand charges are modelled
+        best-effort. Always confirm on{' '}
         <a href="https://www.energymadeeasy.gov.au/" target="_blank" rel="noreferrer">
           Energy Made Easy
         </a>
