@@ -853,7 +853,7 @@ body {
   flex-direction: column;
   gap: 12px;
 }
-.retailer-group {
+.offer-row {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -873,13 +873,26 @@ body {
 .more-toggle:hover {
   text-decoration: underline;
 }
-.nested-offer {
-  margin-left: 18px;
+/* same-price marketing variants of one offer */
+.variant-list {
+  list-style: none;
+  margin: 0 0 2px 18px;
+  padding: 6px 0 6px 10px;
   border-left: 2px solid #e0d8ec;
-  padding-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
-.nested-offer .plan-card {
-  box-shadow: 0 1px 5px rgba(40, 40, 70, 0.08);
+.variant-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--body);
+}
+.variant-name {
+  flex: 1;
 }
 .plan-card {
   position: relative;
