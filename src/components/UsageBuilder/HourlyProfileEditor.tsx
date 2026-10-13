@@ -1,10 +1,15 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useUsageStore } from '../../store/usageStore';
 import { APPLIANCE_META, soakWindowLabel } from '../../data/applianceProfiles';
 import { stateForPostcode } from '../../data/energyModel';
 import { resolveTouRate, resolveFitRate } from '../../lib/time';
 import { billingDays } from '../../lib/costEngine';
+import { niceTicks } from '../../lib/chartAnim';
 import type { BillingPeriod, CostResult, DayType, Plan, SolarEffectiveness, TouLabel, UsageProfile, Behaviours } from '../../types';
+import { FlexibleLoads } from './FlexibleLoads';
+import { DragHint } from './DragHint';
+import { dragHintSeen, markDragHintSeen } from './dragHintStorage';
+import { prefersReducedMotion, useTweened } from './useTweened';
 
 const VW = 720;
 const VH = 262;
@@ -25,6 +30,10 @@ const PRICE_LINE = '#e0a020';
 // Off-peak scales green (cheapest) → yellow-green (dearest) by price, like the shoulder ramp.
 const OFFPEAK_LOW = '#4f9e6a';
 const OFFPEAK_HIGH = '#8faa39';
+/** How long the dashed "before" outline lingers after a flexible-load toggle (matches the CSS fade). */
+const GHOST_MS = 1800;
+/** How long the savings badge stays up after a toggle (the CSS fade-out ends at the same time). */
+const BADGE_MS = 6000;
 
 const BAND_COLOR: Record<string, string> = {
   PEAK: '#c0392b',
@@ -52,55 +61,9 @@ function lerpColor(a: string, b: string, t: number): string {
   return `#${h(ar, br)}${h(ag, bg)}${h(ab, bb)}`;
 }
 
-function BehaviourRow({ on, onToggle, title, blurb, children }: { on: boolean; onToggle: (v: boolean) => void; title: string; blurb: string; children?: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className={`behaviour-item${on ? ' on' : ''}`}>
-      <label className="behaviour-head">
-        <input type="checkbox" checked={on} onChange={(e) => onToggle(e.target.checked)} />
-        <span className="behaviour-title">
-          {title}
-          <span className="behaviour-blurb">{blurb}</span>
-        </span>
-      </label>
-      {on && children && (
-        <button className="behaviour-tune" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-          {open ? 'Hide options ▾' : 'Customise ▸'}
-        </button>
-      )}
-      {on && open && <div className="behaviour-settings">{children}</div>}
-    </div>
-  );
-}
+/** Axis label for a gridline value: whole numbers bare, fractions to one decimal. */
+const tickLabel = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
 
-function Slider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  suffix,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  suffix: string;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <label className="behaviour-slider">
-      <span>{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-      <span className="behaviour-slider-val">
-        {value}
-        {suffix}
-      </span>
-    </label>
-  );
-}
 function isFreeHour(plan: Plan | undefined, hour: number, day: DayType): boolean {
   return !!plan?.freeWindows?.some(
     (w) => w.dayTypes.includes(day) && hour >= Math.floor(w.fromHour) && hour < Math.ceil(w.toHour),
@@ -121,16 +84,50 @@ function isTimeBand(key: string): boolean {
 
 type Mode = 'loads' | 'billed';
 
+/** The chart as it was just before a flexible-load toggle — drives the "before" outline + savings badge. */
+interface ChangeSnapshot {
+  id: number;
+  at: number;
+  import: number[];
+  gross: number[];
+  total: number | null;
+}
+
+/** A fading dashed outline of the previous bar heights. */
+interface Ghost {
+  id: number;
+  values: number[];
+}
+
 interface Props {
   activePlan?: Plan;
   activeResult?: CostResult;
 }
 
 export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
-  const { profile, manualProfile, loads, effectiveness, home, period, postcode, setEffectiveness, setManualImport, resetManual, behaviours, setBehaviour } =
-    useUsageStore();
+  const {
+    profile,
+    manualProfile,
+    loads,
+    gross,
+    effectiveness,
+    home,
+    period,
+    postcode,
+    selectedPlanId,
+    setEffectiveness,
+    setManualImport,
+    resetManual,
+    behaviours,
+    setBehaviour,
+  } = useUsageStore();
   const soakLabel = soakWindowLabel(stateForPostcode(postcode));
   const [mode, setMode] = useState<Mode>('billed');
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [change, setChange] = useState<ChangeSnapshot | null>(null);
+  // Drag demo: `hintRun` remounts it (replay); `hintOn` shows it.
+  const [hintRun, setHintRun] = useState(0);
+  const [hintOn, setHintOn] = useState(false);
 
   const eff = manualProfile ?? profile;
   const edited = manualProfile != null;
@@ -141,12 +138,36 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
   const impTotal = imp.reduce((a, b) => a + b, 0);
   const derivedTotal = profile.import.reduce((a, b) => a + b, 0);
 
-  const pct = (v: number) => Math.round(v * 100);
-  const setPct = (k: keyof Behaviours) => (v: number) => setBehaviour({ [k]: v / 100 } as Partial<Behaviours>);
+  // Play the drag demo once, the first time someone sees the editable chart.
+  useEffect(() => {
+    if (mode !== 'billed' || dragHintSeen()) return;
+    const t = setTimeout(() => {
+      markDragHintSeen();
+      setHintRun((n) => n + 1);
+      setHintOn(true);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [mode]);
+  const stopHint = useCallback(() => setHintOn(false), []);
+  const replayHint = () => {
+    setMode('billed');
+    setHintRun((n) => n + 1);
+    setHintOn(true);
+  };
 
-  const showHotWater = home.hotWater === 'electric-storage' || home.hotWater === 'controlled-load';
-  const showHeatPump = home.hotWater === 'heat-pump';
-  const showEv = home.evCount > 0;
+  // A tickbox flip: snapshot the chart first so the change animates from a visible "before".
+  const onToggle = (patch: Partial<Behaviours>) => {
+    setChange((c) => ({ id: (c?.id ?? 0) + 1, at: Date.now(), import: eff.import, gross, total: activeResult?.total ?? null }));
+    setBehaviour(patch);
+    const el = chartRef.current;
+    if (el && !prefersReducedMotion()) {
+      const r = el.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  };
+
+  const ghostLive = change != null && Date.now() - change.at < GHOST_MS && !prefersReducedMotion();
+  const periodWord = period === 'annual' ? 'year' : period === 'quarterly' ? 'quarter' : 'month';
 
   return (
     <div className="panel">
@@ -162,36 +183,58 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
         </div>
       </div>
 
-      {mode === 'billed' && (
-        <div className="edit-toolbar">
-          <span className="edit-total">
-            {impTotal.toFixed(1)} kWh/day
-            {edited && Math.abs(impTotal - derivedTotal) > 0.05 && (
-              <em>
-                {' '}({impTotal >= derivedTotal ? '+' : '−'}
-                {Math.abs(impTotal - derivedTotal).toFixed(1)} vs estimate)
-              </em>
-            )}
-          </span>
-          {edited && (
-            <button className="reset-btn" onClick={resetManual}>
-              Reset
-            </button>
-          )}
-        </div>
-      )}
+      <FlexibleLoads home={home} behaviours={behaviours} soakLabel={soakLabel} onToggle={onToggle} onTune={setBehaviour} />
 
-      {mode === 'loads' ? (
-        <LoadsChart loads={loads} />
-      ) : (
-        <BilledChart
-          profile={eff}
-          activePlan={activePlan}
-          activeResult={activeResult}
-          period={period}
-          onEdit={(h, v) => setManualImport(h, v, true)}
-        />
-      )}
+      <div className="edit-toolbar">
+        <span className="edit-total">
+          {mode === 'billed' && (
+            <>
+              {impTotal.toFixed(1)} kWh/day
+              {edited && Math.abs(impTotal - derivedTotal) > 0.05 && (
+                <em>
+                  {' '}({impTotal >= derivedTotal ? '+' : '−'}
+                  {Math.abs(impTotal - derivedTotal).toFixed(1)} vs estimate)
+                </em>
+              )}
+            </>
+          )}
+        </span>
+        {change?.total != null && activeResult && (
+          <SavingsBadge
+            key={change.id}
+            before={change.total}
+            after={activeResult.total}
+            who={selectedPlanId ? 'Your selected plan' : 'Cheapest plan'}
+            periodWord={periodWord}
+          />
+        )}
+        {mode === 'billed' && (
+          <button className="hint-btn" onClick={replayHint}>
+            ↕ How to edit
+          </button>
+        )}
+        {mode === 'billed' && edited && (
+          <button className="reset-btn" onClick={resetManual}>
+            Reset
+          </button>
+        )}
+      </div>
+
+      <div ref={chartRef}>
+        {mode === 'loads' ? (
+          <LoadsChart loads={loads} ghost={ghostLive ? { id: change!.id, values: change!.gross } : undefined} />
+        ) : (
+          <BilledChart
+            profile={eff}
+            activePlan={activePlan}
+            activeResult={activeResult}
+            period={period}
+            onEdit={(h, v) => setManualImport(h, v, true)}
+            ghost={ghostLive ? { id: change!.id, values: change!.import } : undefined}
+            hint={{ run: hintRun, on: hintOn, onDone: stopHint }}
+          />
+        )}
+      </div>
 
       {/* Per-period cost contribution. In the billed view the time-of-use energy periods and the
           solar feed-in credit are shown directly on the chart, so only the other non-time costs
@@ -228,87 +271,25 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
           </div>
         </div>
       )}
-
-      {(showHotWater || showHeatPump || showEv || home.poolPump || home.batteryKwh > 0) && (
-        <div className="flexible-loads" style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed #cfc7b8' }}>
-          <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--purple)', margin: '0 0 10px' }}>
-            Flexible loads
-          </p>
-          <p className="behaviour-intro">
-            Moving flexible loads into the cheap/free solar-soak window ({soakLabel}) can cut your bill. Try switching these on and watch the plans re-rank.
-          </p>
-
-          {home.poolPump && (
-            <BehaviourRow
-              on={behaviours.poolTimer}
-              onToggle={(v) => setBehaviour({ poolTimer: v })}
-              title="Put a timer on the pool pump"
-              blurb="Run the pump in the middle of the day instead of morning/evening."
-            >
-              <Slider label="Pump runs" value={behaviours.poolHours} min={2} max={12} step={1} suffix=" h/day" onChange={(v) => setBehaviour({ poolHours: v })} />
-              <Slider label="Shifted to midday" value={pct(behaviours.poolShare)} min={0} max={100} step={5} suffix="%" onChange={setPct('poolShare')} />
-            </BehaviourRow>
-          )}
-
-          {showHotWater && (
-            <BehaviourRow
-              on={behaviours.hotWaterTimer}
-              onToggle={(v) => setBehaviour({ hotWaterTimer: v })}
-              title="Add a smart timer to your hot water"
-              blurb="Heat the tank at midday on solar instead of overnight."
-            >
-              <Slider label="Shifted to midday" value={pct(behaviours.hotWaterShare)} min={0} max={100} step={5} suffix="%" onChange={setPct('hotWaterShare')} />
-            </BehaviourRow>
-          )}
-
-          {showHeatPump && (
-            <BehaviourRow
-              on={behaviours.heatPumpTimer}
-              onToggle={(v) => setBehaviour({ heatPumpTimer: v })}
-              title="Set a timer on your heat-pump hot water"
-              blurb="Heat pumps sip power — running midday soaks your solar cheaply."
-            >
-              <Slider label="Shifted to midday" value={pct(behaviours.heatPumpShare)} min={0} max={100} step={5} suffix="%" onChange={setPct('heatPumpShare')} />
-            </BehaviourRow>
-          )}
-
-          {showEv && (
-            <BehaviourRow
-              on={behaviours.evScheduled}
-              onToggle={(v) => setBehaviour({ evScheduled: v })}
-              title="Schedule EV charging for the day"
-              blurb="Charge on midday solar instead of plugging in at night."
-            >
-              <label className="behaviour-check">
-                <input type="checkbox" checked={behaviours.evHomeDaytime} onChange={(e) => setBehaviour({ evHomeDaytime: e.target.checked })} />
-                The car is usually home during the day
-              </label>
-              <Slider label="Shifted to midday" value={pct(behaviours.evShare)} min={0} max={100} step={5} suffix="%" onChange={setPct('evShare')} />
-            </BehaviourRow>
-          )}
-
-          {showEv && (
-            <BehaviourRow
-              on={behaviours.v2g}
-              onToggle={(v) => setBehaviour({ v2g: v })}
-              title="Get a V2G charger (car works as a home battery)"
-              blurb="Charges in your selected plan's cheapest hours and covers the evening peak — through a 7 kW charger."
-            >
-              <Slider label="Usable capacity" value={behaviours.v2gKwh} min={5} max={60} step={5} suffix=" kWh" onChange={(v) => setBehaviour({ v2gKwh: v })} />
-            </BehaviourRow>
-          )}
-
-          {home.batteryKwh > 0 && (
-            <BehaviourRow
-              on={behaviours.batteryGridCharge}
-              onToggle={(v) => setBehaviour({ batteryGridCharge: v })}
-              title="Let the battery top up from the grid"
-              blurb="On low-solar days, fill the battery in your selected plan's cheapest hours to cover the evening peak."
-            />
-          )}
-        </div>
-      )}
     </div>
+  );
+}
+
+/** Slides in after a flexible-load toggle with the bill before → after, then fades and unmounts. */
+function SavingsBadge({ before, after, who, periodWord }: { before: number; after: number; who: string; periodWord: string }) {
+  const [shown, setShown] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setShown(false), BADGE_MS);
+    return () => clearTimeout(t);
+  }, []);
+  if (!shown) return null;
+  const delta = after - before;
+  const same = Math.abs(delta) < 1;
+  return (
+    <span className={`savings-badge${same ? '' : delta < 0 ? ' saved' : ' cost'}`} role="status">
+      {who} now <b>{money(after)}</b>/{periodWord}{' '}
+      {same ? '(no change)' : `(${delta < 0 ? '−' : '+'}${money(Math.abs(delta))})`}
+    </span>
   );
 }
 
@@ -331,22 +312,41 @@ const XLabels = () => (
   </>
 );
 
+/** Dashed outlines at the previous bar heights; CSS fades them out. */
+function GhostBars({ ghost, y, baseY }: { ghost: Ghost; y: (v: number) => number; baseY: number }) {
+  return (
+    <g className="ghost-outline" pointerEvents="none">
+      {ghost.values.map((v, h) =>
+        v > 0.001 ? <rect key={h} x={M.left + h * SLOT + BAR_PAD} y={y(v)} width={BAR_W} height={Math.max(0, baseY - y(v))} rx={1.5} /> : null,
+      )}
+    </g>
+  );
+}
+
 /** "What's using power" — stacked appliance loads through the day. */
-function LoadsChart({ loads }: { loads: Record<string, number[]> }) {
-  const cats = APPLIANCE_META.filter((c) => (loads[c.key] ?? []).some((v) => v > 0.001));
-  const gross = Array.from({ length: 24 }, (_, h) => cats.reduce((s, c) => s + (loads[c.key][h] ?? 0), 0));
-  const maxY = Math.max(0.5, ...gross) * 1.1;
+function LoadsChart({ loads, ghost }: { loads: Record<string, number[]>; ghost?: Ghost }) {
+  // Tween every category (absent ones as zeros, so a load that's switched off shrinks away rather
+  // than vanishing) plus the scale.
+  const target: Record<string, number | number[]> = {};
+  for (const c of APPLIANCE_META) target[c.key] = loads[c.key] ?? Array(24).fill(0);
+  const grossT = Array.from({ length: 24 }, (_, h) => APPLIANCE_META.reduce((s, c) => s + (loads[c.key]?.[h] ?? 0), 0));
+  target.__max = Math.max(0.5, ...grossT, ...(ghost?.values ?? [])) * 1.1;
+  const tw = useTweened(target);
+  const series = (k: string) => tw[k] as number[];
+  const maxY = tw.__max as number;
+
+  const cats = APPLIANCE_META.filter((c) => series(c.key).some((v) => v > 0.001));
   const y = (v: number) => M.top + PLOT_H * (1 - Math.min(1, v / maxY));
 
   return (
     <>
       <p className="editor-meta">Each bar is the power your appliances draw that hour of the day.</p>
       <svg className="bar-chart" viewBox={`0 0 ${VW} ${VH}`}>
-        {[0, 0.5, 1].map((f) => (
-          <g key={f}>
-            <line x1={M.left} x2={VW - M.right} y1={y(maxY * f)} y2={y(maxY * f)} stroke="#0001" />
-            <text className="axis-label" x={2} y={y(maxY * f) + 3}>
-              {(maxY * f).toFixed(1)}
+        {niceTicks(maxY).map((v) => (
+          <g key={`t${v}`} className="grid-tick">
+            <line x1={M.left} x2={VW - M.right} y1={y(v)} y2={y(v)} stroke="#0001" />
+            <text className="axis-label" x={2} y={y(v) + 3}>
+              {tickLabel(v)}
             </text>
           </g>
         ))}
@@ -356,7 +356,7 @@ function LoadsChart({ loads }: { loads: Record<string, number[]> }) {
           return (
             <g key={h}>
               {cats.map((c) => {
-                const v = loads[c.key][h] ?? 0;
+                const v = series(c.key)[h] ?? 0;
                 if (v <= 0.001) return null;
                 const yTop = y(acc + v);
                 const height = y(acc) - yTop;
@@ -366,6 +366,7 @@ function LoadsChart({ loads }: { loads: Record<string, number[]> }) {
             </g>
           );
         })}
+        {ghost && <GhostBars key={ghost.id} ghost={ghost} y={y} baseY={M.top + PLOT_H} />}
         <XLabels />
       </svg>
       <div className="chart-legend">
@@ -386,27 +387,56 @@ function BilledChart({
   activeResult,
   period,
   onEdit,
+  ghost,
+  hint,
 }: {
   profile: UsageProfile;
   activePlan?: Plan;
   activeResult?: CostResult;
   period: BillingPeriod;
   onEdit?: (hour: number, value: number) => void;
+  ghost?: Ghost;
+  hint?: { run: number; on: boolean; onDone: () => void };
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<number | null>(null);
+  const [hoverHour, setHoverHour] = useState<number | null>(null);
   // Freeze the import scale while dragging so the axis doesn't jump as bars change.
   const [frozenMax, setFrozenMax] = useState<number | null>(null);
   const editable = !!onEdit;
 
   // One representative day. Weekday TOU resolution drives the shading/labels; per-period kWh below
   // still weights weekday + weekend day counts so it matches the billed cost.
-  const imp = profile.import;
-  const exp = profile.export;
   const flat = !touLabelAt(activePlan, 12, DISPLAY_DAY) && !touLabelAt(activePlan, 18, DISPLAY_DAY);
-  const computedMaxImp = Math.max(0.5, ...imp) * (editable ? 1.25 : 1.1);
-  const maxImp = frozenMax ?? computedMaxImp;
-  const maxExp = Math.max(0, ...exp) * 1.45; // headroom at the bottom for the export watermark
+  const targetImp = profile.import.map((v) => Math.max(0, v));
+  const targetExp = profile.export.map((v) => Math.max(0, v));
+  // Leave room for the "before" outline so it isn't clipped when a toggle lowers the peak.
+  const computedMaxImp = Math.max(0.5, ...targetImp, ...(ghost?.values ?? [])) * (editable ? 1.25 : 1.1);
+
+  // Feed-in ($/kWh) resolved PER HOUR from the plan's FiT bands. (The old code mapped over the bands
+  // and resolved each at hour 0, so all-but-one came back 0 — that's why Amber's line looked wrong.)
+  const fitBands = activePlan?.solarFeedIn ?? [];
+  const fitAt = (h: number) => resolveFitRate(fitBands, h, DISPLAY_DAY);
+  const targetExportRates = Array.from({ length: 24 }, (_, h) => fitAt(h));
+  const targetPriceRates = activePlan?.touRates?.map((r) => r.blocks[0]?.perKwh ?? 0) ?? [];
+
+  // Everything that sets geometry is tweened, so bars, the zero line, gridlines and price curves
+  // glide to new values. While dragging it snaps (the bar must track the pointer exactly).
+  const tw = useTweened(
+    {
+      imp: targetImp,
+      exp: targetExp,
+      maxImp: frozenMax ?? computedMaxImp,
+      maxExp: Math.max(0, ...targetExp) * 1.45, // headroom at the bottom for the export watermark
+      price: targetPriceRates,
+      fit: targetExportRates,
+    },
+    { immediate: drag != null },
+  );
+  const imp = tw.imp;
+  const exp = tw.exp;
+  const maxImp = tw.maxImp;
+  const maxExp = tw.maxExp > 0.001 ? tw.maxExp : 0;
   const totalRange = maxImp + maxExp;
   const zeroY = M.top + PLOT_H * (maxExp > 0 ? maxImp / totalRange : 1);
   const importH = Math.max(1, zeroY - M.top);
@@ -424,7 +454,7 @@ function BilledChart({
   const startDrag = (h: number, e: React.PointerEvent) => {
     if (!editable) return;
     e.preventDefault();
-    setFrozenMax(computedMaxImp);
+    setFrozenMax(maxImp);
     setDrag(h);
     try {
       svgRef.current?.setPointerCapture(e.pointerId);
@@ -490,7 +520,7 @@ function BilledChart({
   const kwhByKey = new Map<string, number>();
   const addKwh = (key: string, kwh: number) => kwhByKey.set(key, (kwhByKey.get(key) ?? 0) + kwh);
   for (let h = 0; h < 24; h++) {
-    const kwh = Math.max(0, profile.import[h] ?? 0);
+    const kwh = targetImp[h] ?? 0;
     addKwh(hourPeriod(h, 'WEEKDAY').key, kwh * days.weekday);
     addKwh(hourPeriod(h, 'WEEKEND').key, kwh * days.weekend);
   }
@@ -514,22 +544,19 @@ function BilledChart({
   // Variable-wholesale (Amber-style) plans have 24 hourly bands — too many to label. Instead show
   // one tint + the hourly price curve, and a single aggregated usage watermark.
   const wholesale = !!activePlan?.variableWholesale;
-  const priceRates = activePlan?.touRates?.map((r) => r.blocks[0]?.perKwh ?? 0) ?? [];
-  const maxRate = Math.max(0.01, ...priceRates);
-  const minRate = Math.min(...(priceRates.length ? priceRates : [0]));
+  const priceRates = tw.price;
+  // Scale + labels from the target rates (stable), the curve itself from the tweened ones.
+  const maxRate = Math.max(0.01, ...targetPriceRates);
+  const minRate = Math.min(...(targetPriceRates.length ? targetPriceRates : [0]));
   const priceYr = (rate: number) => M.top + importH * (0.08 + 0.85 * (1 - rate / maxRate));
   const priceY = (h: number) => priceYr(priceRates[h] ?? 0);
   const priceLine = priceRates.map((_, h) => `${M.left + h * SLOT + SLOT / 2},${priceY(h)}`).join(' ');
   const wholesaleKwh = [...periods.values()].reduce((s, p) => s + p.kwh, 0);
   const wholesaleCost = bandCost('WHOLESALE');
 
-  // Feed-in ($/kWh) resolved PER HOUR from the plan's FiT bands. (The old code mapped over the bands
-  // and resolved each at hour 0, so all-but-one came back 0 — that's why Amber's line looked wrong.)
-  const fitBands = activePlan?.solarFeedIn ?? [];
-  const fitAt = (h: number) => resolveFitRate(fitBands, h, DISPLAY_DAY);
-  const exportRates = Array.from({ length: 24 }, (_, h) => fitAt(h));
-  const hasExportRates = exportRates.some((r) => r > 0);
-  const maxExportRate = Math.max(0.01, ...exportRates);
+  const exportRates = tw.fit;
+  const hasExportRates = targetExportRates.some((r) => r > 0);
+  const maxExportRate = Math.max(0.01, ...targetExportRates);
   // Wholesale plans draw an hourly feed-in curve BELOW the line: a higher feed-in reads as a bigger
   // credit, so it sits FURTHER from the x-axis (further down), like a more-negative amount.
   const exportYr = (rate: number) => zeroY + (0.14 + 0.78 * (rate / maxExportRate)) * exportH;
@@ -540,14 +567,14 @@ function BilledChart({
   // shade + a $ credit / kWh watermark, mirroring the import periods above the line.
   const totalDays = days.weekday + days.weekend;
   const expInfo = Array.from({ length: 24 }, (_, h) => {
-    const rate = fitAt(h);
+    const rate = targetExportRates[h];
     return { key: `FIT#${Math.round(rate * 1000)}`, rate };
   });
   const expMaxRate = Math.max(0.01, ...expInfo.map((i) => i.rate));
   const expColor = (rate: number) => lerpColor('#aecbef', '#1f5fb0', rate / expMaxRate);
   const expPeriods = new Map<string, { key: string; rate: number; kwh: number; credit: number }>();
   for (let h = 0; h < 24; h++) {
-    const e = Math.max(0, exp[h] ?? 0);
+    const e = targetExp[h] ?? 0;
     if (e <= 0.001) continue;
     const info = expInfo[h];
     const cur = expPeriods.get(info.key) ?? { key: info.key, rate: info.rate, kwh: 0, credit: 0 };
@@ -557,10 +584,16 @@ function BilledChart({
   }
   const expCenter = (key: string): number | null => {
     const hs: number[] = [];
-    for (let h = 0; h < 24; h++) if (expInfo[h].key === key && (exp[h] ?? 0) > 0.001) hs.push(h);
+    for (let h = 0; h < 24; h++) if (expInfo[h].key === key && (targetExp[h] ?? 0) > 0.001) hs.push(h);
     return hs.length ? (hs[0] + hs[hs.length - 1] + 1) / 2 : null;
   };
-  const totalExportKwh = exp.reduce((s, e) => s + Math.max(0, e), 0) * totalDays;
+  const totalExportKwh = targetExp.reduce((s, e) => s + e, 0) * totalDays;
+
+  // Drag demo target: the busiest evening hour (where shifting load matters most).
+  let hintHour = 16;
+  for (let h = 16; h <= 20; h++) if (targetImp[h] > targetImp[hintHour]) hintHour = h;
+  if (targetImp[hintHour] < 0.05) hintHour = targetImp.indexOf(Math.max(...targetImp));
+  const showHint = editable && !!hint?.on && hintHour >= 0;
 
   return (
     <>
@@ -584,169 +617,208 @@ function BilledChart({
           </>
         )}
       </p>
-      <svg
-        ref={svgRef}
-        className={`bar-chart${editable ? ' editable' : ''}`}
-        viewBox={`0 0 ${VW} ${VH}`}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        {/* Import-region background: one tint for wholesale, else each hour tinted by its period. */}
-        {wholesale ? (
-          <rect x={M.left} y={M.top} width={PLOT_W} height={importH} fill={WHOLESALE_FILL} opacity={0.1} />
-        ) : (
-          hourInfo.map((info, h) => (
-            <rect key={`bg${h}`} x={M.left + h * SLOT} y={M.top} width={SLOT} height={importH} fill={info.color} opacity={0.14} />
-          ))
-        )}
-        {/* Export-region background: blue feed-in sections (each hour shaded by its feed-in rate). */}
-        {maxExp > 0 &&
-          exportH > 2 &&
-          Array.from({ length: 24 }, (_, h) => (
-            <rect
-              key={`ebg${h}`}
-              x={M.left + h * SLOT}
-              y={zeroY}
-              width={SLOT}
-              height={exportH}
-              fill={wholesale ? EXPORT_FILL : expColor(fitAt(h))}
-              opacity={0.12}
-            />
-          ))}
-        <line x1={M.left} x2={VW - M.right} y1={zeroY} y2={zeroY} stroke="#333" strokeWidth={1} />
-        <text className="axis-label" x={2} y={M.top + 8}>
-          {maxImp.toFixed(1)}
-        </text>
-        {maxExp > 0 && (
-          <text className="axis-label" x={2} y={M.top + PLOT_H}>
-            −{maxExp.toFixed(1)}
-          </text>
-        )}
-        {Array.from({ length: 24 }, (_, h) => {
-          const x = M.left + h * SLOT + BAR_PAD;
-          const i = Math.max(0, imp[h] ?? 0);
-          const e = Math.max(0, exp[h] ?? 0);
-          const fill = wholesale ? WHOLESALE_FILL : hourInfo[h].color;
-          return (
-            <g key={h}>
-              {i > 0.001 && <rect x={x} y={yImp(i)} width={BAR_W} height={zeroY - yImp(i)} fill={fill} rx={1.5} />}
-              {editable && (
-                <rect x={x} y={yImp(i) - 1.5} width={BAR_W} height={3} fill="#0007" rx={1.5} />
-              )}
-              {e > 0.001 && exportH > 0 && (
-                <rect x={x} y={zeroY} width={BAR_W} height={(e / maxExp) * exportH} fill={EXPORT_FILL} rx={1.5} />
-              )}
-            </g>
-          );
-        })}
-        {/* Transparent grab targets over the import region (on top so they catch the pointer). */}
-        {editable &&
-          Array.from({ length: 24 }, (_, h) => (
-            <rect
-              key={`hit${h}`}
-              x={M.left + h * SLOT}
-              y={M.top}
-              width={SLOT}
-              height={importH}
-              fill="transparent"
-              style={{ cursor: 'ns-resize' }}
-              onPointerDown={(e) => startDrag(h, e)}
-            />
-          ))}
-        {/* Watermarks paint AFTER the bars (on top) with a white halo, so the $/kWh figures stay
-            legible over tall bars. pointerEvents:none keeps the bars draggable underneath. */}
-        {wholesale ? (
-          <g pointerEvents="none" fill={WHOLESALE_FILL} stroke="#fff" strokeWidth={3.5} strokeLinejoin="round" paintOrder="stroke" opacity={0.92} textAnchor="middle" fontWeight={900}>
-            <text x={M.left + PLOT_W * 0.28} y={M.top + 22} fontSize={22}>
-              {money(wholesaleCost)}
-            </text>
-            <text x={M.left + PLOT_W * 0.28} y={M.top + 39} fontSize={12}>
-              {Math.round(wholesaleKwh).toLocaleString('en-AU')} kWh
-            </text>
-          </g>
-        ) : (
-          [...periods.values()].map((p) => {
-            const run = bestRun.get(p.key)!;
-            const cx = clampX(M.left + ((run.start + run.end) / 2) * SLOT);
-            return (
-              <g key={`wm${p.key}`} pointerEvents="none" fill={p.color} stroke="#fff" strokeWidth={3.5} strokeLinejoin="round" paintOrder="stroke" opacity={0.92} textAnchor="middle" fontWeight={900}>
-                <text x={cx} y={M.top + 22} fontSize={22}>
-                  {money(p.cost)}
-                </text>
-                <text x={cx} y={M.top + 39} fontSize={12}>
-                  {Math.round(p.kwh).toLocaleString('en-AU')} kWh
+      <div className="chart-wrap">
+        <svg
+          ref={svgRef}
+          className={`bar-chart${editable ? ' editable' : ''}`}
+          viewBox={`0 0 ${VW} ${VH}`}
+          onPointerDownCapture={() => hint?.on && hint.onDone()}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          {/* Import-region background: one tint for wholesale, else each hour tinted by its period. */}
+          {wholesale ? (
+            <rect className="tint" x={M.left} y={M.top} width={PLOT_W} height={importH} style={{ fill: WHOLESALE_FILL }} opacity={0.1} />
+          ) : (
+            hourInfo.map((info, h) => (
+              <rect key={`bg${h}`} className="tint" x={M.left + h * SLOT} y={M.top} width={SLOT} height={importH} style={{ fill: info.color }} opacity={0.14} />
+            ))
+          )}
+          {/* Export-region background: blue feed-in sections (each hour shaded by its feed-in rate). */}
+          {maxExp > 0 &&
+            exportH > 2 &&
+            Array.from({ length: 24 }, (_, h) => (
+              <rect
+                key={`ebg${h}`}
+                className="tint"
+                x={M.left + h * SLOT}
+                y={zeroY}
+                width={SLOT}
+                height={exportH}
+                style={{ fill: wholesale ? EXPORT_FILL : expColor(targetExportRates[h]) }}
+                opacity={0.12}
+              />
+            ))}
+          {/* Gridlines at fixed kWh values: they slide/compress as the (tweened) scale changes. */}
+          {niceTicks(maxImp)
+            .filter((v) => v > 0)
+            .map((v) => (
+              <g key={`t${v}`} className="grid-tick" pointerEvents="none">
+                <line x1={M.left} x2={VW - M.right} y1={yImp(v)} y2={yImp(v)} stroke="#0002" strokeDasharray="2 3" />
+                <text className="axis-label" x={2} y={yImp(v) + 3}>
+                  {tickLabel(v)}
                 </text>
               </g>
+            ))}
+          <line x1={M.left} x2={VW - M.right} y1={zeroY} y2={zeroY} stroke="#333" strokeWidth={1} />
+          <text className="axis-label" x={2} y={zeroY + 3}>
+            0
+          </text>
+          {maxExp > 0 && exportH > 14 && (
+            <text className="axis-label" x={2} y={M.top + PLOT_H}>
+              −{maxExp.toFixed(1)}
+            </text>
+          )}
+          {Array.from({ length: 24 }, (_, h) => {
+            const x = M.left + h * SLOT + BAR_PAD;
+            const i = imp[h] ?? 0;
+            const e = exp[h] ?? 0;
+            const fill = wholesale ? WHOLESALE_FILL : hourInfo[h].color;
+            const hot = editable && (hoverHour === h || drag === h);
+            return (
+              <g key={h}>
+                {i > 0.001 && <rect className="bar" x={x} y={yImp(i)} width={BAR_W} height={zeroY - yImp(i)} style={{ fill }} rx={1.5} />}
+                {editable && (
+                  <rect className={`grab-handle${hot ? ' hot' : ''}`} x={x} y={yImp(i) - (hot ? 2.5 : 1.5)} width={BAR_W} height={hot ? 5 : 3} rx={1.5} />
+                )}
+                {hot && (
+                  <path
+                    className="grab-chevrons"
+                    d={`M${x + BAR_W / 2 - 4} ${yImp(i) - 7} l4 -4 l4 4 M${x + BAR_W / 2 - 4} ${yImp(i) + 7} l4 4 l4 -4`}
+                    pointerEvents="none"
+                  />
+                )}
+                {e > 0.001 && exportH > 0 && maxExp > 0 && (
+                  <rect className="bar" x={x} y={zeroY} width={BAR_W} height={(e / maxExp) * exportH} style={{ fill: EXPORT_FILL }} rx={1.5} />
+                )}
+              </g>
             );
-          })
-        )}
-        {maxExp > 0 &&
-          exportH > 30 &&
-          (() => {
-            const items = wholesale
-              ? [{ key: 'W', cx: clampX(M.left + PLOT_W * 0.72), dollars: activeResult?.breakdown.solarCredit ?? 0, kwh: totalExportKwh }]
-              : [...expPeriods.values()].map((p) => {
-                  const c = expCenter(p.key);
-                  return c == null ? null : { key: p.key, cx: clampX(M.left + c * SLOT), dollars: -p.credit, kwh: p.kwh };
-                });
-            return items.map((it) =>
-              !it ? null : (
-                <g
-                  key={`ewm${it.key}`}
-                  pointerEvents="none"
-                  fill={EXPORT_FILL}
-                  stroke="#fff"
-                  strokeWidth={3.5}
-                  strokeLinejoin="round"
-                  paintOrder="stroke"
-                  opacity={0.92}
-                  textAnchor="middle"
-                  fontWeight={900}
-                >
-                  <text x={it.cx} y={M.top + PLOT_H - 22} fontSize={20}>
-                    {money(it.dollars)}
+          })}
+          {ghost && <GhostBars key={ghost.id} ghost={ghost} y={yImp} baseY={zeroY} />}
+          {/* Transparent grab targets over the import region (on top so they catch the pointer). */}
+          {editable &&
+            Array.from({ length: 24 }, (_, h) => (
+              <rect
+                key={`hit${h}`}
+                x={M.left + h * SLOT}
+                y={M.top}
+                width={SLOT}
+                height={importH}
+                fill="transparent"
+                style={{ cursor: 'ns-resize' }}
+                onPointerDown={(e) => startDrag(h, e)}
+                onPointerEnter={() => setHoverHour(h)}
+                onPointerLeave={() => setHoverHour((cur) => (cur === h ? null : cur))}
+              />
+            ))}
+          {/* Watermarks paint AFTER the bars (on top) with a white halo, so the $/kWh figures stay
+              legible over tall bars. pointerEvents:none keeps the bars draggable underneath. */}
+          {wholesale ? (
+            <g pointerEvents="none" fill={WHOLESALE_FILL} stroke="#fff" strokeWidth={3.5} strokeLinejoin="round" paintOrder="stroke" opacity={0.92} textAnchor="middle" fontWeight={900}>
+              <text x={M.left + PLOT_W * 0.28} y={M.top + 22} fontSize={22}>
+                {money(wholesaleCost)}
+              </text>
+              <text x={M.left + PLOT_W * 0.28} y={M.top + 39} fontSize={12}>
+                {Math.round(wholesaleKwh).toLocaleString('en-AU')} kWh
+              </text>
+            </g>
+          ) : (
+            [...periods.values()].map((p) => {
+              const run = bestRun.get(p.key)!;
+              const cx = clampX(M.left + ((run.start + run.end) / 2) * SLOT);
+              return (
+                <g key={`wm${p.key}`} pointerEvents="none" fill={p.color} stroke="#fff" strokeWidth={3.5} strokeLinejoin="round" paintOrder="stroke" opacity={0.92} textAnchor="middle" fontWeight={900}>
+                  <text x={cx} y={M.top + 22} fontSize={22}>
+                    {money(p.cost)}
                   </text>
-                  <text x={it.cx} y={M.top + PLOT_H - 7} fontSize={12}>
-                    {Math.round(it.kwh).toLocaleString('en-AU')} kWh
+                  <text x={cx} y={M.top + 39} fontSize={12}>
+                    {Math.round(p.kwh).toLocaleString('en-AU')} kWh
                   </text>
                 </g>
-              ),
-            );
-          })()}
-        {/* Wholesale: the hourly price curve behind the bars + one header. Else: per-period labels. */}
-        {wholesale ? (
-          <>
-            <polyline points={priceLine} fill="none" stroke={PRICE_LINE} strokeWidth={2} strokeDasharray="4 3" pointerEvents="none" />
-            {hasExportRates && <polyline points={exportLine} fill="none" stroke={EXPORT_FILL} strokeWidth={2} strokeDasharray="4 3" pointerEvents="none" opacity={0.6} />}
-            <text x={M.left + PLOT_W / 2} y={16} textAnchor="middle" fontSize={13} fontWeight={700} fill={WHOLESALE_FILL} pointerEvents="none">
-              Wholesale price · {Math.round(minRate * 100)}–{Math.round(maxRate * 100)}c/kWh through the day
-            </text>
-            {/* Right axis: c/kWh amounts for the import price curve (gold) and feed-in curve (blue). */}
-            {[maxRate, minRate].map((r, i) => (
-              <text key={`py${i}`} className="axis-label" x={VW - 2} y={priceYr(r) + 3} textAnchor="end" fill={PRICE_LINE} pointerEvents="none">
-                {Math.round(r * 100)}c
+              );
+            })
+          )}
+          {maxExp > 0 &&
+            exportH > 30 &&
+            (() => {
+              const items = wholesale
+                ? [{ key: 'W', cx: clampX(M.left + PLOT_W * 0.72), dollars: activeResult?.breakdown.solarCredit ?? 0, kwh: totalExportKwh }]
+                : [...expPeriods.values()].map((p) => {
+                    const c = expCenter(p.key);
+                    return c == null ? null : { key: p.key, cx: clampX(M.left + c * SLOT), dollars: -p.credit, kwh: p.kwh };
+                  });
+              return items.map((it) =>
+                !it ? null : (
+                  <g
+                    key={`ewm${it.key}`}
+                    pointerEvents="none"
+                    fill={EXPORT_FILL}
+                    stroke="#fff"
+                    strokeWidth={3.5}
+                    strokeLinejoin="round"
+                    paintOrder="stroke"
+                    opacity={0.92}
+                    textAnchor="middle"
+                    fontWeight={900}
+                  >
+                    <text x={it.cx} y={M.top + PLOT_H - 22} fontSize={20}>
+                      {money(it.dollars)}
+                    </text>
+                    <text x={it.cx} y={M.top + PLOT_H - 7} fontSize={12}>
+                      {Math.round(it.kwh).toLocaleString('en-AU')} kWh
+                    </text>
+                  </g>
+                ),
+              );
+            })()}
+          {/* Wholesale: the hourly price curve behind the bars + one header. Else: per-period labels. */}
+          {wholesale ? (
+            <>
+              <polyline points={priceLine} fill="none" stroke={PRICE_LINE} strokeWidth={2} strokeDasharray="4 3" pointerEvents="none" />
+              {hasExportRates && <polyline points={exportLine} fill="none" stroke={EXPORT_FILL} strokeWidth={2} strokeDasharray="4 3" pointerEvents="none" opacity={0.6} />}
+              <text x={M.left + PLOT_W / 2} y={16} textAnchor="middle" fontSize={13} fontWeight={700} fill={WHOLESALE_FILL} pointerEvents="none">
+                Wholesale price · {Math.round(minRate * 100)}–{Math.round(maxRate * 100)}c/kWh through the day
               </text>
-            ))}
-            {hasExportRates && (
-              <text className="axis-label" x={VW - 2} y={exportYr(maxExportRate) + 3} textAnchor="end" fill={EXPORT_FILL} pointerEvents="none">
-                {Math.round(maxExportRate * 100)}c
-              </text>
-            )}
-          </>
-        ) : (
-          [...periods.values()].map((p) => {
-            const run = bestRun.get(p.key)!;
-            const cx = clampX(M.left + ((run.start + run.end) / 2) * SLOT);
-            return (
-              <text key={`hdr${p.key}`} x={cx} y={16} textAnchor="middle" fontSize={13} fontWeight={700} fill={p.color} pointerEvents="none">
-                {p.name} · {p.rateC}c
-              </text>
-            );
-          })
+              {/* Right axis: c/kWh amounts for the import price curve (gold) and feed-in curve (blue). */}
+              {[maxRate, minRate].map((r, i) => (
+                <text key={`py${i}`} className="axis-label" x={VW - 2} y={priceYr(r) + 3} textAnchor="end" fill={PRICE_LINE} pointerEvents="none">
+                  {Math.round(r * 100)}c
+                </text>
+              ))}
+              {hasExportRates && (
+                <text className="axis-label" x={VW - 2} y={exportYr(maxExportRate) + 3} textAnchor="end" fill={EXPORT_FILL} pointerEvents="none">
+                  {Math.round(maxExportRate * 100)}c
+                </text>
+              )}
+            </>
+          ) : (
+            [...periods.values()].map((p) => {
+              const run = bestRun.get(p.key)!;
+              const cx = clampX(M.left + ((run.start + run.end) / 2) * SLOT);
+              return (
+                <text key={`hdr${p.key}`} x={cx} y={16} textAnchor="middle" fontSize={13} fontWeight={700} fill={p.color} pointerEvents="none">
+                  {p.name} · {p.rateC}c
+                </text>
+              );
+            })
+          )}
+          <XLabels />
+        </svg>
+        {showHint && (
+          <DragHint
+            key={hint!.run}
+            vw={VW}
+            vh={VH}
+            x={M.left + hintHour * SLOT + BAR_PAD}
+            width={BAR_W}
+            top={yImp(imp[hintHour] ?? 0)}
+            bottom={zeroY}
+            plotTop={M.top}
+            onDone={hint!.onDone}
+          />
         )}
-        <XLabels />
-      </svg>
+      </div>
     </>
   );
 }

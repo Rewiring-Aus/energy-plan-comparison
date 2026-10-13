@@ -1093,3 +1093,209 @@ body {
 .breakdown .credit .val {
   color: var(--green);
 }
+
+/* ---- usage-chart animation & discoverability ---- */
+.flexible-loads {
+  margin: 4px 0 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed #cfc7b8;
+}
+.flexible-loads-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--purple);
+  margin: 0 0 10px;
+}
+
+/* Toolbar: replay link pushed right; Reset follows it. */
+.hint-btn {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 3px 2px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--purple);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.hint-btn + .reset-btn {
+  margin-left: 0;
+}
+
+.savings-badge {
+  font-size: 13px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #efeaf9;
+  color: var(--ink);
+  animation: badge-life 6s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+.savings-badge b {
+  font-family: 'Kode Mono', monospace;
+}
+.savings-badge.saved {
+  background: #dff3e6;
+  color: #0d6e2d;
+}
+.savings-badge.cost {
+  background: #fbe4e1;
+  color: #a12a1c;
+}
+@keyframes badge-life {
+  0% { opacity: 0; transform: translateY(6px); }
+  6% { opacity: 1; transform: none; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Plan switches cross-fade the period tints and bar colours. */
+.bar-chart .tint,
+.bar-chart .bar {
+  transition: fill 0.3s ease;
+}
+.grid-tick {
+  animation: tick-in 0.45s ease both;
+}
+@keyframes tick-in {
+  from { opacity: 0; }
+}
+
+/* Grab handle on each bar; the hovered/dragged one thickens and shows ↕ chevrons. */
+.grab-handle {
+  fill: #0007;
+}
+.grab-handle.hot {
+  fill: var(--purple);
+}
+.grab-chevrons {
+  fill: none;
+  stroke: var(--purple);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* "Before" outline after a flexible-load toggle. */
+.ghost-outline rect {
+  fill: none;
+  stroke: #333;
+  stroke-width: 1.3;
+  stroke-dasharray: 3 2;
+  animation: ghost-fade 1.8s ease-in forwards;
+}
+@keyframes ghost-fade {
+  0%, 35% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+
+/* Drag demo overlay: same viewBox as the chart, stacked on top of it. */
+.chart-wrap {
+  position: relative;
+}
+.drag-hint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: hint-life 4.2s ease forwards;
+}
+.drag-hint-svg {
+  width: 100%;
+  display: block;
+}
+.hint-bar {
+  fill: rgba(74, 0, 195, 0.18);
+  stroke: var(--purple);
+  stroke-width: 1.6;
+  stroke-dasharray: 4 3;
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: hint-stretch 1.8s cubic-bezier(0.45, 0, 0.3, 1) 0.2s 2;
+}
+.hint-grip {
+  animation: hint-ride 1.8s cubic-bezier(0.45, 0, 0.3, 1) 0.2s 2;
+}
+.hint-grip circle {
+  fill: var(--purple);
+  stroke: #fff;
+  stroke-width: 2;
+}
+.hint-grip path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@keyframes hint-stretch {
+  0%, 100% { transform: scaleY(1); }
+  35% { transform: scaleY(var(--up)); }
+  70% { transform: scaleY(var(--down)); }
+}
+@keyframes hint-ride {
+  0%, 100% { transform: translateY(0); }
+  35% { transform: translateY(calc(var(--h) * (1 - var(--up)) * 1px)); }
+  70% { transform: translateY(calc(var(--h) * (1 - var(--down)) * 1px)); }
+}
+.hint-bubble {
+  position: absolute;
+  width: max-content;
+  max-width: 200px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: var(--purple);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  box-shadow: 0 4px 14px rgba(42, 0, 163, 0.25);
+}
+.hint-bubble.side-left {
+  transform: translate(calc(-100% - 14px), -50%);
+}
+.hint-bubble.side-right {
+  transform: translate(14px, -50%);
+}
+.hint-bubble::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  margin-top: -6px;
+  border: 6px solid transparent;
+}
+.hint-bubble.side-left::after {
+  right: -6px;
+  border-right: 0;
+  border-left-color: var(--purple);
+}
+.hint-bubble.side-right::after {
+  left: -6px;
+  border-left: 0;
+  border-right-color: var(--purple);
+}
+@keyframes hint-life {
+  0% { opacity: 0; }
+  6%, 88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.drag-hint.still {
+  animation-duration: 4s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .savings-badge,
+  .grid-tick,
+  .hint-bar,
+  .hint-grip,
+  .drag-hint {
+    animation: none;
+  }
+  .bar-chart .tint,
+  .bar-chart .bar {
+    transition: none;
+  }
+}
