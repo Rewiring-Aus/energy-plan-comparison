@@ -101,6 +101,15 @@ describe('time-of-use plan', () => {
     expect(shoulders.some((b) => b.detail?.includes('7.0c/kWh'))).toBe(true);
     expect(shoulders.some((b) => b.detail?.includes('24.0c/kWh'))).toBe(true);
   });
+
+  it('still lists a band with no usage, at $0, so the card shows every rate', () => {
+    const offPeakOnly = flat(0);
+    offPeakOnly[3] = 5; // nothing in the 2pm–8pm peak
+    const r = computeCost(plan, netProfile(offPeakOnly), opts);
+    const peak = r.breakdown.usageBands.find((b) => b.key.startsWith('PEAK'));
+    expect(peak?.cost).toBe(0);
+    expect(peak?.detail).toContain('50.0c/kWh');
+  });
 });
 
 describe('solar feed-in (export in the net line)', () => {

@@ -189,15 +189,7 @@ body {
 .panel {
   border-radius: var(--radius);
   padding: 22px 24px;
-  background:
-    repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 27px,
-      rgba(120, 120, 140, 0.07) 27px,
-      rgba(120, 120, 140, 0.07) 28px
-    ),
-    linear-gradient(135deg, #f5f0e8 0%, #ede7db 30%, #f2ece2 60%, #e8e2d6 100%);
+  background: #fff;
   box-shadow: 0 6px 20px rgba(40, 40, 70, 0.12);
   margin-bottom: 22px;
 }
@@ -554,8 +546,10 @@ body {
   stroke-dasharray: 3 3;
   opacity: 0.55;
 }
+/* Sized in viewBox units from the chart's rendered width (useChartScale) so labels stay ~11px on
+   screen however wide the chart is drawn. */
 .axis-label {
-  font-size: 9px;
+  font-size: var(--axis-fs, 9px);
   fill: var(--muted);
   font-family: 'Roboto', sans-serif;
 }
@@ -1047,8 +1041,11 @@ body {
 }
 .sub-caret {
   color: var(--purple);
-  font-size: 10px;
-  width: 10px;
+  font-size: 18px;
+  line-height: 1;
+  width: 16px;
+  flex: none;
+  text-align: center;
 }
 .sub-label {
   flex: 1;

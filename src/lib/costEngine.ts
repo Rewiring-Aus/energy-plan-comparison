@@ -235,15 +235,23 @@ export function computeCost(plan: Plan, profile: UsageProfile, opts: CostOptions
 
   const f = PERIOD_FRACTION[opts.period];
 
-  // --- Build itemised usage bands (one chip per distinct TOU band) ---
+  // --- Build itemised usage bands (one per distinct TOU band) ---
+  // Every band the plan publishes is listed — even one this profile never uses (at $0) — so the
+  // card always shows the plan's full set of rates.
   const usageBands: UsageBand[] = [];
+  const bandCost = (key: string) => annualByBand[key] ?? 0;
   const touBands = (plan.touRates ?? [])
     .map((rate, i) => ({ rate, key: `${rate.label}#${i}` }))
-    .filter((b) => annualByBand[b.key] != null)
-    .sort((a, b) => annualByBand[b.key] - annualByBand[a.key]); // dearest first
+    // A 0c band is the plan's free window (e.g. Solar Sharer) — it's listed once as "Free hours".
+    .filter((b) => !(plan.freeWindows?.length && (b.rate.blocks[0]?.perKwh ?? 0) <= 0))
+    .sort(
+      (a, b) =>
+        bandCost(b.key) - bandCost(a.key) || // dearest first…
+        (b.rate.blocks[0]?.perKwh ?? 0) - (a.rate.blocks[0]?.perKwh ?? 0), // …unused ones by rate
+    );
   if (plan.variableWholesale) {
     // The 24 hourly bands would clutter the breakdown — collapse them into one line.
-    const total = touBands.reduce((s, b) => s + (annualByBand[b.key] ?? 0), 0);
+    const total = touBands.reduce((s, b) => s + bandCost(b.key), 0);
     usageBands.push({
       key: 'WHOLESALE',
       label: 'Variable wholesale usage',
@@ -257,12 +265,12 @@ export function computeCost(plan: Plan, profile: UsageProfile, opts: CostOptions
       usageBands.push({
         key,
         label: TOU_BAND_LABEL[rate.label],
-        cost: annualByBand[key] * f,
+        cost: bandCost(key) * f,
         detail: [c != null ? `${(c * 100).toFixed(1)}c/kWh` : '', windows].filter(Boolean).join(' · '),
       });
     }
   }
-  if (annualByBand.FREE != null) {
+  if (annualByBand.FREE != null || plan.freeWindows?.length) {
     usageBands.push({
       key: 'FREE',
       label: 'Free hours',

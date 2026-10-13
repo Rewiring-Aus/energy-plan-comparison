@@ -10,11 +10,13 @@ import { FlexibleLoads } from './FlexibleLoads';
 import { DragHint } from './DragHint';
 import { dragHintSeen, markDragHintSeen } from './dragHintStorage';
 import { prefersReducedMotion, useTweened } from './useTweened';
+import { useChartScale } from './useChartScale';
 
 const VW = 720;
-const VH = 262;
-// `top` includes a header lane above the plot for the billed chart's period labels.
-const M = { left: 30, right: 8, top: 26, bottom: 22 };
+const VH = 270;
+// `top` includes a header lane above the plot for the billed chart's period labels; `left` and
+// `bottom` leave room for axis labels at their on-screen size (see axisStyle).
+const M = { left: 46, right: 8, top: 26, bottom: 26 };
 const PLOT_W = VW - M.left - M.right;
 const PLOT_H = VH - M.top - M.bottom;
 const SLOT = PLOT_W / 24;
@@ -60,6 +62,11 @@ function lerpColor(a: string, b: string, t: number): string {
   const h = (x: number, y: number) => Math.round(x + (y - x) * k).toString(16).padStart(2, '0');
   return `#${h(ar, br)}${h(ag, bg)}${h(ab, bb)}`;
 }
+
+/** Axis text ≈11px on screen: k = viewBox units per pixel (capped so labels fit the margins). */
+const axisStyle = (k: number) => ({ '--axis-fs': `${Math.max(10, Math.min(22, 11 * k))}px` }) as React.CSSProperties;
+/** Y-axis labels sit right-aligned just left of the plot. */
+const Y_LABEL_X = M.left - 5;
 
 /** Axis label for a gridline value: whole numbers bare, fractions to one decimal. */
 const tickLabel = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
@@ -245,6 +252,8 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
             Fixed <b>{money(activeResult.fixedTotal)}</b>
           </span>
           {bands
+            // Bands with no usage are listed on the plan card for reference; skip them as chips.
+            .filter((b) => b.cost !== 0 || !isTimeBand(b.key))
             .filter((b) => mode === 'loads' || (!isTimeBand(b.key) && b.key !== 'SOLAR' && b.key !== 'WHOLESALE'))
             .map((b) => (
               <span
@@ -337,15 +346,17 @@ function LoadsChart({ loads, ghost }: { loads: Record<string, number[]>; ghost?:
 
   const cats = APPLIANCE_META.filter((c) => series(c.key).some((v) => v > 0.001));
   const y = (v: number) => M.top + PLOT_H * (1 - Math.min(1, v / maxY));
+  const svgRef = useRef<SVGSVGElement>(null);
+  const k = useChartScale(svgRef, VW);
 
   return (
     <>
       <p className="editor-meta">Each bar is the power your appliances draw that hour of the day.</p>
-      <svg className="bar-chart" viewBox={`0 0 ${VW} ${VH}`}>
+      <svg ref={svgRef} className="bar-chart" viewBox={`0 0 ${VW} ${VH}`} style={axisStyle(k)}>
         {niceTicks(maxY).map((v) => (
           <g key={`t${v}`} className="grid-tick">
             <line x1={M.left} x2={VW - M.right} y1={y(v)} y2={y(v)} stroke="#0001" />
-            <text className="axis-label" x={2} y={y(v) + 3}>
+            <text className="axis-label" x={Y_LABEL_X} y={y(v)} dominantBaseline="middle" textAnchor="end">
               {tickLabel(v)}
             </text>
           </g>
@@ -404,6 +415,7 @@ function BilledChart({
   // Freeze the import scale while dragging so the axis doesn't jump as bars change.
   const [frozenMax, setFrozenMax] = useState<number | null>(null);
   const editable = !!onEdit;
+  const k = useChartScale(svgRef, VW);
 
   // One representative day. Weekday TOU resolution drives the shading/labels; per-period kWh below
   // still weights weekday + weekend day counts so it matches the billed cost.
@@ -622,6 +634,7 @@ function BilledChart({
           ref={svgRef}
           className={`bar-chart${editable ? ' editable' : ''}`}
           viewBox={`0 0 ${VW} ${VH}`}
+          style={axisStyle(k)}
           onPointerDownCapture={() => hint?.on && hint.onDone()}
           onPointerMove={moveDrag}
           onPointerUp={endDrag}
@@ -656,17 +669,17 @@ function BilledChart({
             .map((v) => (
               <g key={`t${v}`} className="grid-tick" pointerEvents="none">
                 <line x1={M.left} x2={VW - M.right} y1={yImp(v)} y2={yImp(v)} stroke="#0002" strokeDasharray="2 3" />
-                <text className="axis-label" x={2} y={yImp(v) + 3}>
+                <text className="axis-label" x={Y_LABEL_X} y={yImp(v)} dominantBaseline="middle" textAnchor="end">
                   {tickLabel(v)}
                 </text>
               </g>
             ))}
           <line x1={M.left} x2={VW - M.right} y1={zeroY} y2={zeroY} stroke="#333" strokeWidth={1} />
-          <text className="axis-label" x={2} y={zeroY + 3}>
+          <text className="axis-label" x={Y_LABEL_X} y={zeroY} dominantBaseline="middle" textAnchor="end">
             0
           </text>
           {maxExp > 0 && exportH > 14 && (
-            <text className="axis-label" x={2} y={M.top + PLOT_H}>
+            <text className="axis-label" x={Y_LABEL_X} y={M.top + PLOT_H} textAnchor="end">
               −{maxExp.toFixed(1)}
             </text>
           )}

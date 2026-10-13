@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CostResult, Plan } from '../../types';
 import { RoughBox } from '../ui/RoughBox';
 import { useUsageStore } from '../../store/usageStore';
@@ -32,8 +32,13 @@ interface Props {
 }
 
 export function PlanCard({ plan, result, rank, best, active, pinned, onSelect }: Props) {
-  const [fixedOpen, setFixedOpen] = useState(false);
-  const [usageOpen, setUsageOpen] = useState(false);
+  // The active plan (the one driving the chart) shows its rates; others collapse. Still toggleable.
+  const [fixedOpen, setFixedOpen] = useState(!!active);
+  const [usageOpen, setUsageOpen] = useState(!!active);
+  useEffect(() => {
+    setFixedOpen(!!active);
+    setUsageOpen(!!active);
+  }, [active]);
   const postcode = useUsageStore((s) => s.postcode);
   const b = result.breakdown;
   const r = plan.restrictions;
