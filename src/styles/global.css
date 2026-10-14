@@ -135,10 +135,12 @@ body {
   background-attachment: fixed;
 }
 
+/* The two columns span the full window so each one scrolls from anywhere on its side — including
+   the blank margins and up to the middle of the gap. Their padding re-creates the centred
+   1180px layout: --gutter is the space outside the cards, --cards the two cards' combined width. */
 .app {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 0 20px;
+  --gutter: max(28px, calc((100vw - 1180px) / 2 + 28px));
+  --cards: calc(min(100vw, 1180px) - 100px);
   height: 100vh;
 }
 
@@ -157,8 +159,8 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-  gap: 28px;
+  /* left card gets 1.05/2.05 of the card width; 22px = half the 44px between the cards */
+  grid-template-columns: calc(var(--gutter) + var(--cards) * 0.5122 + 22px) minmax(0, 1fr);
   height: 100vh;
 }
 /* each column scrolls independently */
@@ -166,7 +168,12 @@ body {
 .right-col {
   overflow-y: auto;
   height: 100vh;
-  padding: 28px 8px 60px;
+}
+.left-col {
+  padding: 28px 22px 60px var(--gutter);
+}
+.right-col {
+  padding: 28px var(--gutter) 60px 22px;
 }
 @media (max-width: 900px) {
   .app {
