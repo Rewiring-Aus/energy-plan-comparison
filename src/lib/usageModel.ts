@@ -44,12 +44,23 @@ export const DEFAULT_BEHAVIOURS: Behaviours = {
   v2g: false,
   v2gKwh: 30,
   batteryGridCharge: false,
+  plugBattery: false,
 };
 
 export type ApplianceLoads = Record<ApplianceKey, number[]>;
 
 /** EV/V2G charger inverter limit (kW ≈ kWh/hour) — battery draw and discharge are capped here. */
 export const V2G_POWER_KW = 7;
+/** Portable plug-in battery: usable capacity, and the ~2.4 kW a standard 10 A power point allows. */
+export const PLUG_BATTERY_KWH = 5;
+export const PLUG_BATTERY_POWER_KW = 2.4;
+/** Typical home-battery inverter, used when it shares the power budget with an add-on battery. */
+const HOME_BATTERY_POWER_KW = 5;
+
+/** Whether any battery is set to charge from the grid in a plan's cheap hours (so dispatch depends on the plan). */
+export function isArbitraging(b: Behaviours): boolean {
+  return b.v2g || b.batteryGridCharge || b.plugBattery;
+}
 
 export interface SynthInput {
   home: HomeInputs;
@@ -141,15 +152,17 @@ export function synthesizeProfile({
   }
 
   const solar = includeSolar ? solarGeneration(home.solarKw, state) : zeros();
-  const batteryKwh = home.batteryKwh + (b.v2g ? b.v2gKwh : 0);
+  const batteryKwh = home.batteryKwh + (b.v2g ? b.v2gKwh : 0) + (b.plugBattery ? PLUG_BATTERY_KWH : 0);
+  // Add-on batteries are capped by their charger / power point. A fixed home battery alone is
+  // unconstrained here; alongside an add-on it contributes a typical inverter's worth.
+  const addOnPowerKw = (b.v2g ? V2G_POWER_KW : 0) + (b.plugBattery ? PLUG_BATTERY_POWER_KW : 0);
   const flows = hourlyFlows(gross, solar, includeSolar, {
     effectiveness,
     batteryKwh,
-    // V2G implies off-peak→peak arbitrage, so it helps even without solar.
-    batteryGridCharge: b.batteryGridCharge || b.v2g,
+    // V2G and plug-in batteries imply off-peak→peak arbitrage, so they help even without solar.
+    batteryGridCharge: isArbitraging(b),
     dispatchRates,
-    // The car's charger caps how fast it can charge/discharge; a fixed home battery is unconstrained here.
-    powerLimitKwh: b.v2g ? V2G_POWER_KW : undefined,
+    powerLimitKwh: addOnPowerKw > 0 ? addOnPowerKw + (home.batteryKwh > 0 ? HOME_BATTERY_POWER_KW : 0) : undefined,
   });
   const imp = flows.map((f) => f.import);
   const exp = flows.map((f) => f.export);

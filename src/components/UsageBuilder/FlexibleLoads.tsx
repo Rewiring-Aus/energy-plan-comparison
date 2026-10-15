@@ -2,7 +2,22 @@ import { useState, type ReactNode } from 'react';
 import type { HomeInputs } from '../../data/applianceProfiles';
 import type { Behaviours } from '../../types';
 
-function BehaviourRow({ on, onToggle, title, blurb, children }: { on: boolean; onToggle: (v: boolean) => void; title: string; blurb: string; children?: ReactNode }) {
+function BehaviourRow({
+  on,
+  onToggle,
+  title,
+  blurb,
+  note,
+  children,
+}: {
+  on: boolean;
+  onToggle: (v: boolean) => void;
+  title: string;
+  blurb: string;
+  /** A caveat shown under the blurb (e.g. regulatory status). */
+  note?: string;
+  children?: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className={`behaviour-item${on ? ' on' : ''}`}>
@@ -11,6 +26,7 @@ function BehaviourRow({ on, onToggle, title, blurb, children }: { on: boolean; o
         <span className="behaviour-title">
           {title}
           <span className="behaviour-blurb">{blurb}</span>
+          {note && <span className="behaviour-note">{note}</span>}
         </span>
       </label>
       {on && children && (
@@ -67,7 +83,6 @@ export function FlexibleLoads({ home, behaviours, soakLabel, onToggle, onTune }:
   const showHotWater = home.hotWater === 'electric-storage' || home.hotWater === 'controlled-load';
   const showHeatPump = home.hotWater === 'heat-pump';
   const showEv = home.evCount > 0;
-  if (!(showHotWater || showHeatPump || showEv || home.poolPump || home.batteryKwh > 0)) return null;
 
   const pct = (v: number) => Math.round(v * 100);
   const setPct = (k: keyof Behaviours) => (v: number) => onTune({ [k]: v / 100 } as Partial<Behaviours>);
@@ -147,6 +162,15 @@ export function FlexibleLoads({ home, behaviours, soakLabel, onToggle, onTune }:
           blurb="On low-solar days, fill the battery in your selected plan's cheapest hours to cover the evening peak."
         />
       )}
+
+      {/* Always offered: needs no house, roof or wiring work. */}
+      <BehaviourRow
+        on={behaviours.plugBattery}
+        onToggle={(v) => onToggle({ plugBattery: v })}
+        title="Buy a portable 5 kWh plug-in battery"
+        blurb="Plugs into a normal power point: it charges in your plan's cheapest hours and runs the home through the evening peak. Good for apartments and renters."
+        note="Not yet legal to use this way in Australia — governments are working on standards to make it possible."
+      />
     </div>
   );
 }

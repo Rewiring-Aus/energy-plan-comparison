@@ -119,6 +119,7 @@ export interface Behaviours {
   v2g: boolean; // vehicle-to-grid: EV acts as a home battery
   v2gKwh: number; // usable V2G capacity
   batteryGridCharge: boolean; // home battery tops up from off-peak grid
+  plugBattery: boolean; // portable plug-in battery on a power point (renters / apartments)
 }
 
 export type BillingPeriod = 'monthly' | 'quarterly' | 'annual';

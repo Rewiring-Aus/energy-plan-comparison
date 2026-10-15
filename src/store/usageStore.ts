@@ -29,6 +29,7 @@ const DEFAULT_FILTERS: PlanFilters = {
 import { DEFAULT_HOME, type HomeInputs, type ApplianceKey } from '../data/applianceProfiles';
 import {
   DEFAULT_BEHAVIOURS,
+  isArbitraging,
   periodToDailyKwh,
   synthesizeProfile,
   type ApplianceLoads,
@@ -101,7 +102,7 @@ function build(s: DeriveInputs): DerivedProfile {
   // Optimise battery/V2G dispatch to the selected plan's rates (only matters when grid arbitrage
   // is on). No selected plan ⇒ the default midday solar-soak window is used.
   const plan = s.selectedPlanId ? PLAN_BY_ID.get(s.selectedPlanId) : undefined;
-  const arbitraging = s.behaviours.v2g || s.behaviours.batteryGridCharge;
+  const arbitraging = isArbitraging(s.behaviours);
   const dispatchRates = plan && arbitraging ? planHourlyImportRates(plan, 'WEEKDAY') : undefined;
   return synthesizeProfile({
     home: s.home,

@@ -2,7 +2,7 @@ import './styles/global.css';
 import { useMemo, useState } from 'react';
 import { useUsageStore, baselineDaily } from './store/usageStore';
 import { rankPlans, rankPlansOptimised, computeCost } from './lib/costEngine';
-import type { SynthInput } from './lib/usageModel';
+import { isArbitraging, type SynthInput } from './lib/usageModel';
 import { PLAN_BY_ID, dnspForPostcode, plansForDnsp, passesFilters } from './lib/plans';
 import { stateForPostcode } from './data/energyModel';
 import { HomeModelSentence } from './components/UsageBuilder/HomeModelSentence';
@@ -34,7 +34,7 @@ export default function App() {
   // With battery/V2G arbitrage on, each plan is optimised to its OWN rates (per-plan dispatch) so
   // the ranking is a fair comparison — selecting one plan no longer re-prices the others. Skipped
   // when the user has hand-edited a scenario (manualProfile), which is billed as-is everywhere.
-  const arbitraging = (behaviours.v2g || behaviours.batteryGridCharge) && !manualProfile;
+  const arbitraging = isArbitraging(behaviours) && !manualProfile;
   const synthBase: Omit<SynthInput, 'dispatchRates'> = useMemo(
     () => ({
       home,

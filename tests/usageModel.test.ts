@@ -111,4 +111,22 @@ describe('behaviours: shifting load into the solar soak window', () => {
     };
     expect(eveningImport(withBehaviour({ v2g: true }))).toBeLessThan(eveningImport(DEFAULT_BEHAVIOURS));
   });
+
+  it('a plug-in battery shifts evening load into cheap hours with no solar, EV or home battery', () => {
+    // A TOU plan: cheap midday, dear evening (what the battery is dispatched against).
+    const dispatchRates = Array.from({ length: 24 }, (_, h) => (h >= 10 && h < 14 ? 0.08 : h >= 16 && h < 21 ? 0.5 : 0.25));
+    const run = (b: Behaviours) =>
+      synthesizeProfile({ ...baseInput, home: DEFAULT_HOME, includeSolar: false, behaviours: b, dispatchRates }).profile.import;
+    const off = run(DEFAULT_BEHAVIOURS);
+    const on = run(withBehaviour({ plugBattery: true }));
+    const sum = (a: number[], hs: number[]) => hs.reduce((s, h) => s + a[h], 0);
+    const evening = [16, 17, 18, 19, 20];
+    const midday = [10, 11, 12, 13];
+    expect(sum(on, evening)).toBeLessThan(sum(off, evening));
+    expect(sum(on, midday)).toBeGreaterThan(sum(off, midday));
+    // Never covers more than a power point can deliver in an hour (2.4 kW).
+    for (let h = 0; h < 24; h++) expect(off[h] - on[h]).toBeLessThanOrEqual(2.4 + 1e-9);
+    // Stores at most 5 kWh a day: evening relief ≤ 5 kWh × round-trip.
+    expect(sum(off, evening) - sum(on, evening)).toBeLessThanOrEqual(5);
+  });
 });
