@@ -517,14 +517,6 @@ body {
 .edit-toolbar .switch {
   font-size: 13px;
 }
-.edit-total {
-  font-family: 'Kode Mono', monospace;
-  color: var(--ink);
-}
-.edit-total em {
-  color: var(--purple);
-  font-style: normal;
-}
 .reset-btn {
   margin-left: auto;
   border: 1.5px solid var(--purple);
@@ -1110,35 +1102,10 @@ body {
 /* ---- usage-chart animation & discoverability ---- */
 .flexible-loads {
   margin: 4px 0 16px;
-  padding-bottom: 14px;
-  border-bottom: 1px dashed #cfc7b8;
-}
-.flexible-loads-title {
-  font-size: 13px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--purple);
-  margin: 0 0 10px;
 }
 
-/* Toolbar: replay link pushed right; Reset follows it. */
-.hint-btn {
-  margin-left: auto;
-  border: none;
-  background: none;
-  padding: 3px 2px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--purple);
-  cursor: pointer;
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
-}
-.hint-btn + .reset-btn {
-  margin-left: 0;
-}
+
+
 
 .savings-badge {
   font-size: 13px;
@@ -1311,4 +1278,33 @@ body {
   .bar-chart .bar {
     transition: none;
   }
+}
+
+/* Collapsible "How this chart works" under the usage chart. */
+.chart-help {
+  margin-top: 10px;
+  border-top: 1px dashed #ddd6c8;
+  padding-top: 8px;
+}
+.chart-help-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--purple);
+  cursor: pointer;
+}
+.chart-help-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #444;
+  padding: 4px 0 2px 22px;
+}
+.chart-help-body p {
+  margin: 0 0 8px;
 }

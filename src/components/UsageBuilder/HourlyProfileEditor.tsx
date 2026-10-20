@@ -32,6 +32,11 @@ const PRICE_LINE = '#e0a020';
 // Off-peak scales green (cheapest) → yellow-green (dearest) by price, like the shoulder ramp.
 const OFFPEAK_LOW = '#4f9e6a';
 const OFFPEAK_HIGH = '#8faa39';
+/** Fixed (time-independent) charges in the strip under the billed chart. */
+const FIXED_FILL = '#56607a';
+/** Height of that strip, below the x-axis labels (viewBox units). */
+const STRIP_H = 58;
+const TOTAL_FILL = '#2b2540';
 /** How long the dashed "before" outline lingers after a flexible-load toggle (matches the CSS fade). */
 const GHOST_MS = 1800;
 /** How long the savings badge stays up after a toggle (the CSS fade-out ends at the same time). */
@@ -44,7 +49,7 @@ const BAND_COLOR: Record<string, string> = {
   ANYTIME: '#4a00c3',
   FREE: '#12c46e',
   CONTROLLED_LOAD: '#1f9e8f',
-  DEMAND: '#777',
+  DEMAND: '#9a6430',
   SOLAR: '#0d6e2d',
 };
 
@@ -136,14 +141,12 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
   const [hintRun, setHintRun] = useState(0);
   const [hintOn, setHintOn] = useState(false);
 
+  const [helpOpen, setHelpOpen] = useState(false);
+
   const eff = manualProfile ?? profile;
   const edited = manualProfile != null;
-  const imp = eff.import;
   const hasSolar = home.solarKw > 0;
   const bands = activeResult?.breakdown.usageBands ?? [];
-
-  const impTotal = imp.reduce((a, b) => a + b, 0);
-  const derivedTotal = profile.import.reduce((a, b) => a + b, 0);
 
   // Play the drag demo once, the first time someone sees the editable chart.
   useEffect(() => {
@@ -156,10 +159,14 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
     return () => clearTimeout(t);
   }, [mode]);
   const stopHint = useCallback(() => setHintOn(false), []);
-  const replayHint = () => {
-    setMode('billed');
-    setHintRun((n) => n + 1);
-    setHintOn(true);
+  // Opening "How this chart works" on the billed chart also plays the drag demo.
+  const toggleHelp = () => {
+    const opening = !helpOpen;
+    setHelpOpen(opening);
+    if (opening && mode === 'billed') {
+      setHintRun((n) => n + 1);
+      setHintOn(true);
+    }
   };
 
   // A tickbox flip: snapshot the chart first so the change animates from a visible "before".
@@ -178,8 +185,11 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
 
   return (
     <div className="panel">
-      {mode === 'billed' && <h2>See if you can shift your usage to save</h2>}
-      <div className="editor-tabs">
+      <h2>See if you can shift your usage to save</h2>
+
+      <FlexibleLoads home={home} behaviours={behaviours} soakLabel={soakLabel} onToggle={onToggle} onTune={setBehaviour} />
+
+      <div className="edit-toolbar">
         <div className="seg mode-seg">
           <button className={mode === 'loads' ? 'active' : ''} onClick={() => setMode('loads')}>
             What's using power
@@ -188,24 +198,6 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
             What I'm paying for
           </button>
         </div>
-      </div>
-
-      <FlexibleLoads home={home} behaviours={behaviours} soakLabel={soakLabel} onToggle={onToggle} onTune={setBehaviour} />
-
-      <div className="edit-toolbar">
-        <span className="edit-total">
-          {mode === 'billed' && (
-            <>
-              {impTotal.toFixed(1)} kWh/day
-              {edited && Math.abs(impTotal - derivedTotal) > 0.05 && (
-                <em>
-                  {' '}({impTotal >= derivedTotal ? '+' : '−'}
-                  {Math.abs(impTotal - derivedTotal).toFixed(1)} vs estimate)
-                </em>
-              )}
-            </>
-          )}
-        </span>
         {change?.total != null && activeResult && (
           <SavingsBadge
             key={change.id}
@@ -214,11 +206,6 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
             who={selectedPlanId ? 'Your selected plan' : 'Cheapest plan'}
             periodWord={periodWord}
           />
-        )}
-        {mode === 'billed' && (
-          <button className="hint-btn" onClick={replayHint}>
-            ↕ How to edit
-          </button>
         )}
         {mode === 'billed' && edited && (
           <button className="reset-btn" onClick={resetManual}>
@@ -243,10 +230,9 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
         )}
       </div>
 
-      {/* Per-period cost contribution. In the billed view the time-of-use energy periods and the
-          solar feed-in credit are shown directly on the chart, so only the other non-time costs
-          (fixed, controlled load, demand) are chipped below; the loads view shows the full set. */}
-      {activeResult && (
+      {/* The billed chart draws every cost on the chart itself (fixed charges in the strip under the
+          plot). The loads chart has no costs on it, so list the full breakdown as chips. */}
+      {mode === 'loads' && activeResult && (
         <div className="period-chips">
           <span className="chip fixed">
             Fixed <b>{money(activeResult.fixedTotal)}</b>
@@ -254,7 +240,6 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
           {bands
             // Bands with no usage are listed on the plan card for reference; skip them as chips.
             .filter((b) => b.cost !== 0 || !isTimeBand(b.key))
-            .filter((b) => mode === 'loads' || (!isTimeBand(b.key) && b.key !== 'SOLAR' && b.key !== 'WHOLESALE'))
             .map((b) => (
               <span
                 key={b.key}
@@ -268,6 +253,15 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
         </div>
       )}
 
+      <ChartHelp
+        open={helpOpen}
+        onToggle={toggleHelp}
+        mode={mode}
+        plan={activePlan}
+        hasExport={eff.export.some((v) => v > 0.001)}
+        periodWord={periodWord}
+      />
+
       {hasSolar && (
         <div className="behaviour-row" style={{ marginTop: 12 }}>
           <span className="behaviour-label">Solar realism</span>
@@ -278,6 +272,88 @@ export function HourlyProfileEditor({ activePlan, activeResult }: Props) {
               </button>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Collapsible plain-English explanation of whichever chart is showing. */
+function ChartHelp({
+  open,
+  onToggle,
+  mode,
+  plan,
+  hasExport,
+  periodWord,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  mode: Mode;
+  plan?: Plan;
+  hasExport: boolean;
+  periodWord: string;
+}) {
+  const retailer = plan?.retailer ?? 'your plan';
+  const flat = !touLabelAt(plan, 12, DISPLAY_DAY) && !touLabelAt(plan, 18, DISPLAY_DAY) && !plan?.freeWindows?.length;
+  return (
+    <div className={`chart-help${open ? ' open' : ''}`}>
+      <button className="chart-help-toggle" onClick={onToggle} aria-expanded={open}>
+        <span className="sub-caret">{open ? '▾' : '▸'}</span> How this chart works
+      </button>
+      {open && (
+        <div className="chart-help-body">
+          {mode === 'loads' ? (
+            <>
+              <p>
+                This is your home's electricity use across a typical day, hour by hour — midnight on the left, midday in the
+                middle, midnight again on the right — split up by appliance.
+              </p>
+              <p>
+                It's everything the home uses, before any solar or battery, so it isn't the same as what you buy from the grid.
+                Switch to <strong>What I'm paying for</strong> to see your grid use priced by your plan.
+              </p>
+              <p>Tick an option above to see how moving a load changes the shape of your day.</p>
+            </>
+          ) : (
+            <>
+              <p>
+                This is your home's electricity use across a typical day, hour by hour — midnight on the left, midday in the
+                middle, midnight again on the right.
+              </p>
+              {plan?.variableWholesale ? (
+                <p>
+                  Bars above the line are the power you buy from the grid each hour. With {retailer} the price changes every hour
+                  with the wholesale market: the dashed gold line is a modelled price based on average wholesale prices (real bills
+                  swing with market volatility). The figure at the top is what that use costs per {periodWord}.
+                </p>
+              ) : flat ? (
+                <p>
+                  Bars above the line are the power you buy from the grid each hour. {retailer} charges the same price at any time
+                  of day; the figure at the top is what that use costs per {periodWord}.
+                </p>
+              ) : (
+                <p>
+                  Bars above the line are the power you buy from the grid each hour, coloured by what {retailer} charges at that
+                  time of day — red for peak, orange or yellow for shoulder, green for off-peak and bright green for free. The
+                  figures along the top are what each price period costs you per {periodWord}.
+                </p>
+              )}
+              {hasExport && (
+                <p>
+                  Bars below the line are spare solar sent to the grid. It earns a feed-in credit, shown as a negative amount.
+                </p>
+              )}
+              <p>
+                The strip underneath holds the charges that don't depend on <em>when</em> you use power, like the daily supply
+                charge. Everything on the chart adds up to the total bill.
+              </p>
+              <p>
+                <strong>Try it:</strong> drag any bar up or down to move use to a different time of day, and watch the plans
+                re-rank. <strong>Reset</strong> puts it back.
+              </p>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -351,7 +427,6 @@ function LoadsChart({ loads, ghost }: { loads: Record<string, number[]>; ghost?:
 
   return (
     <>
-      <p className="editor-meta">Each bar is the power your appliances draw that hour of the day.</p>
       <svg ref={svgRef} className="bar-chart" viewBox={`0 0 ${VW} ${VH}`} style={axisStyle(k)}>
         {niceTicks(maxY).map((v) => (
           <g key={`t${v}`} className="grid-tick">
@@ -388,6 +463,47 @@ function LoadsChart({ loads, ghost }: { loads: Record<string, number[]>; ghost?:
         ))}
       </div>
     </>
+  );
+}
+
+/** The strip of time-independent charges under the billed chart, ending in "= total". */
+function FixedStrip({
+  items,
+  total,
+  periodWord,
+}: {
+  items: { key: string; label: string; cost: number; color: string }[];
+  total: number;
+  periodWord: string;
+}) {
+  const all = [...items, { key: 'TOTAL', label: `total per ${periodWord}`, cost: total, color: TOTAL_FILL }];
+  const gap = 6;
+  const w = (PLOT_W - gap * (all.length - 1)) / all.length;
+  const y0 = VH + 8;
+  const h = STRIP_H - 12;
+  return (
+    <g pointerEvents="none" textAnchor="middle" fontWeight={900} stroke="#fff" strokeWidth={3.5} strokeLinejoin="round" paintOrder="stroke">
+      {all.map((it, i) => {
+        const x = M.left + i * (w + gap);
+        const total = it.key === 'TOTAL';
+        return (
+          <g key={it.key} fill={it.color}>
+            {total ? (
+              <rect x={x} y={y0} width={w} height={h} rx={5} fill="none" stroke="#0003" strokeWidth={1.2} strokeDasharray="4 3" />
+            ) : (
+              <rect className="tint" x={x} y={y0} width={w} height={h} rx={5} style={{ fill: it.color }} opacity={0.14} stroke="none" />
+            )}
+            <text x={x + w / 2} y={y0 + 22} fontSize={20}>
+              {total ? '= ' : ''}
+              {money(it.cost)}
+            </text>
+            <text x={x + w / 2} y={y0 + 38} fontSize={12}>
+              {it.label}
+            </text>
+          </g>
+        );
+      })}
+    </g>
   );
 }
 
@@ -607,33 +723,32 @@ function BilledChart({
   if (targetImp[hintHour] < 0.05) hintHour = targetImp.indexOf(Math.max(...targetImp));
   const showHint = editable && !!hint?.on && hintHour >= 0;
 
+  // Charges that don't depend on WHEN power is used (supply, demand, controlled load) sit in a strip
+  // under the plot, styled like the period labels above it, ending in the total — so everything on
+  // the chart visibly adds up to the bill.
+  const periodWord = period === 'annual' ? 'year' : period === 'quarterly' ? 'quarter' : 'month';
+  const stripItems = activeResult
+    ? [
+        {
+          key: 'FIXED',
+          label: activeResult.breakdown.fees > 0 ? 'Supply charge & fees' : 'Daily supply charge',
+          cost: activeResult.fixedTotal,
+          color: FIXED_FILL,
+        },
+        ...activeResult.breakdown.usageBands
+          .filter((b) => !isTimeBand(b.key) && b.key !== 'SOLAR' && b.key !== 'WHOLESALE' && b.cost !== 0)
+          .map((b) => ({ key: b.key, label: b.label, cost: b.cost, color: BAND_COLOR[b.key] ?? '#777' })),
+      ]
+    : [];
+  const vhTotal = VH + (stripItems.length ? STRIP_H : 0);
+
   return (
     <>
-      <p className="editor-meta">
-        {wholesale ? (
-          <>
-            Bars are grid <em>import</em>; the <span style={{ color: PRICE_LINE }}>▬</span> line is{' '}
-            <strong>{activePlan?.retailer ?? 'the plan'}</strong>'s wholesale price, which changes every hour.{' '}
-            <em>Modelled from average wholesale prices — real bills swing with market volatility.</em>
-          </>
-        ) : (
-          <>
-            Bars above the line are grid <em>import</em> (what you're billed), shaded by{' '}
-            <strong>{activePlan?.retailer ?? 'the plan'}</strong>'s {flat ? 'flat rate' : 'time-of-use periods'};
-            below the line is <em>export</em> (earns the feed-in credit).{' '}
-            {editable ? (
-              <strong>Drag any bar to shift load and watch the plans re-rank.</strong>
-            ) : (
-              <>This is your usage net of solar &amp; battery.</>
-            )}
-          </>
-        )}
-      </p>
       <div className="chart-wrap">
         <svg
           ref={svgRef}
           className={`bar-chart${editable ? ' editable' : ''}`}
-          viewBox={`0 0 ${VW} ${VH}`}
+          viewBox={`0 0 ${VW} ${vhTotal}`}
           style={axisStyle(k)}
           onPointerDownCapture={() => hint?.on && hint.onDone()}
           onPointerMove={moveDrag}
@@ -817,12 +932,15 @@ function BilledChart({
             })
           )}
           <XLabels />
+          {stripItems.length > 0 && activeResult && (
+            <FixedStrip items={stripItems} total={activeResult.total} periodWord={periodWord} />
+          )}
         </svg>
         {showHint && (
           <DragHint
             key={hint!.run}
             vw={VW}
-            vh={VH}
+            vh={vhTotal}
             x={M.left + hintHour * SLOT + BAR_PAD}
             width={BAR_W}
             top={yImp(imp[hintHour] ?? 0)}

@@ -89,7 +89,6 @@ export function FlexibleLoads({ home, behaviours, soakLabel, onToggle, onTune }:
 
   return (
     <div className="flexible-loads">
-      <p className="flexible-loads-title">Flexible loads</p>
       <p className="behaviour-intro">
         Moving flexible loads into the cheap/free solar-soak window ({soakLabel}) can cut your bill. Tick these and watch the chart change.
       </p>
